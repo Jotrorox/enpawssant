@@ -1,76 +1,94 @@
-:root {
-  --color-bg: #fff6f8;
-  --color-text: #3b2a3a;
+@import "tailwindcss";
+
+@theme {
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-transparent: transparent;
+
+  /* Text and dark accents */
+  --color-ink: #3b2a3a;
+  --color-muted: #8a7387;
+  --color-plum: #4a3247;
+  --color-plum-soft: #cbbcc8;
+
+  /* Pink surfaces, lightest to strongest */
+  --color-blush-50: #fff7f9;
+  --color-blush-100: #fdeef2;
+  --color-blush-200: #f9dfe6;
+  --color-blush-300: #f7c6d3;
+  --color-blush-400: #f3b2c4;
+  --color-rose: #e0708f;
+  --color-rose-strong: #c9466d;
+
+  /* Highlights and coach */
+  --color-cream: #fde7b2;
+  --color-peach: #f9c497;
+  --color-lavender: #efedfb;
+
+  /* Move annotations */
+  --color-nag-brilliant: #1f8a5b;
+  --color-nag-good: #2f9e44;
+  --color-nag-interesting: #5b4fcf;
+  --color-nag-dubious: #d9822b;
+  --color-nag-mistake: #d64545;
+
   --color-error: #b3261e;
+
   --font-display: "Fredoka", system-ui, sans-serif;
   --font-body: "Nunito", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --titlebar-height: 28px;
+  /* Unicode chess glyphs come from a system symbol font. */
+  --font-chess: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", serif;
 
-  color-scheme: light;
-  font-family: var(--font-body);
-  font-size: 16px;
-  line-height: 1.5;
-  color: var(--color-text);
-  background-color: var(--color-bg);
-  -webkit-font-smoothing: antialiased;
+  --shadow-card: 0 1px 2px rgb(74 50 71 / 0.04), 0 4px 16px rgb(74 50 71 / 0.04);
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+@layer base {
+  :root {
+    color-scheme: light;
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--color-ink);
+    background-color: var(--color-blush-50);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    background-color: var(--color-blush-50);
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-rose);
+    outline-offset: 2px;
+  }
 }
 
-html,
-body {
-  margin: 0;
-  height: 100%;
-  background-color: var(--color-bg);
-}
-
-body {
-  overflow: hidden;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.titlebar {
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: var(--titlebar-height);
-}
-
-.app {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  height: 100%;
-  padding: var(--titlebar-height) 2rem 2rem;
-}
-
-.wordmark {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 3.5rem;
-  letter-spacing: 0.01em;
-}
-
-.engine {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.engine code {
-  font-family: var(--font-mono);
-  font-size: 0.95em;
-}
-
-.engine-error {
-  color: var(--color-error);
+@utility selectable {
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* Sizes the eval bar + board row so the board is the largest square that fits its container. The
+   row is 40px wider than the board (eval bar and gap) and the board is 30px taller than it is wide
+   (cat ears), so the height limit is 100cqh + 10px. */
+@utility board-fit {
+  width: min(100cqw, calc(100cqh + 10px));
 }
