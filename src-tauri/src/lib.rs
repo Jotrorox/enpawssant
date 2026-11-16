@@ -1,19 +1,50 @@
 mod engine;
 
-// Chess logic lives in `chess-core`; nothing calls into it yet.
-use chess_core as _;
+use engine::{Engine, EngineEvent, EngineInfo};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager, RunEvent, State};
 
-/// Starts the Stockfish sidecar and returns the engine's `id name`.
+/// Starts the Stockfish sidecar if needed and describes it.
 #[tauri::command]
-async fn engine_info(app: tauri::AppHandle) -> Result<String, String> {
-    engine::engine_name(&app).await
+async fn engine_info(app: AppHandle, engine: State<'_, Engine>) -> Result<EngineInfo, String> {
+    engine.info(&app).await
+}
+
+/// Analyses `fen` with `multipv` lines until another position is requested or
+/// `engine_stop` is called. Updates arrive on `on_event`.
+#[tauri::command]
+async fn engine_analyze(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    fen: String,
+    multipv: u32,
+    on_event: Channel<EngineEvent>,
+) -> Result<(), String> {
+    engine.analyze(&app, fen, multipv, on_event).await
+}
+
+/// Stops the current analysis.
+#[tauri::command]
+async fn engine_stop(engine: State<'_, Engine>) -> Result<(), String> {
+    engine.stop().await;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![engine_info])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .manage(Engine::default())
+        .invoke_handler(tauri::generate_handler![
+            engine_info,
+            engine_analyze,
+            engine_stop
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                tauri::async_runtime::block_on(app.state::<Engine>().shutdown());
+            }
+        });
 }

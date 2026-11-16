@@ -5,6 +5,9 @@ export type Piece = { color: Color; type: PieceType };
 /** A square name such as `e4`. */
 export type Square = string;
 
+/** An engine suggestion drawn on the board; `strength` (0..1) sets its weight. */
+export type Arrow = { from: Square; to: Square; strength: number };
+
 export const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
 /** Placement of a FEN as a map from square name to piece. */
@@ -57,15 +60,15 @@ export function isLightSquare(square: Square): boolean {
   return (file + rank) % 2 === 1;
 }
 
-/** Formats a white-relative evaluation in pawns, e.g. `+0.35`. */
-export function formatEval(pawns: number): string {
-  return `${pawns >= 0 ? "+" : "−"}${Math.abs(pawns).toFixed(2)}`;
+/** The side to move in a FEN. */
+export function fenTurn(fen: string): Color {
+  return fen.split(" ")[1] === "b" ? "b" : "w";
 }
 
-/** White's expected share (0..1) for a white-relative evaluation in pawns. */
-export function whiteShare(pawns: number): number {
-  // Logistic curve used by lichess for its eval bar.
-  return 1 / (1 + Math.exp(-0.368208 * pawns));
+/** Index of the next move to be played in a FEN's position (0 is White's first move). */
+export function fenPlyIndex(fen: string): number {
+  const fullmove = Number(fen.split(" ")[5]) || 1;
+  return (fullmove - 1) * 2 + (fenTurn(fen) === "b" ? 1 : 0);
 }
 
 /**

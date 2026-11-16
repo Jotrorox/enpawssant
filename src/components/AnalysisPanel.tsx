@@ -1,8 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createResource, createSignal, For, Match, type Resource, Show, Switch } from "solid-js";
-import { formatEval, moveNumberPrefix } from "../chess/board";
+import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
 import {
-  type Analysis,
+  type AnalysisUpdate,
+  type EngineInfo,
+  fetchEngineInfo,
+  positionScore,
+} from "../chess/engine";
+import { formatScore, type GameResult, shareFor } from "../chess/score";
+import {
   EXPLORER_FEN,
   type ExplorerRow,
   type ExplorerSource,
@@ -29,7 +34,10 @@ type AnalysisPanelProps = {
   moves: GameMove[];
   ply: number;
   fen: string;
-  analysis?: Analysis;
+  analysis?: AnalysisUpdate;
+  engineOn: boolean;
+  engineError?: string;
+  onToggleEngine: () => void;
   onPly: (ply: number) => void;
   onToggleNag: (nag: Nag) => void;
 };
@@ -59,13 +67,21 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
           </Card>
         }
       >
-        <EngineCard engine={engine} ply={props.ply} analysis={props.analysis} />
+        <EngineCard
+          engine={engine}
+          fen={props.fen}
+          analysis={props.analysis}
+          enabled={props.engineOn}
+          error={props.engineError}
+          onToggle={props.onToggleEngine}
+        />
         <ExplorerCard hasData={props.fen === EXPLORER_FEN} />
         <Notation
           moves={props.moves}
           variations={props.game.variations}
           ply={props.ply}
           fen={props.fen}
+          score={positionScore(props.analysis)}
           onPly={props.onPly}
           onToggleNag={props.onToggleNag}
         />
@@ -74,11 +90,22 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
   );
 }
 
-const fetchEngineInfo = () => invoke<string>("engine_info");
+/** Moves of each engine line to show; the rest would be cut off anyway. */
+const LINE_MOVES = 12;
 
-function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: Analysis }) {
+type EngineCardProps = {
+  engine: Resource<EngineInfo>;
+  fen: string;
+  analysis?: AnalysisUpdate;
+  enabled: boolean;
+  error?: string;
+  onToggle: () => void;
+};
+
+function EngineCard(props: EngineCardProps) {
   const engine = props.engine;
-  const [enabled, setEnabled] = createSignal(true);
+  const searching = () =>
+    props.enabled && props.analysis && !props.analysis.outcome ? props.analysis : undefined;
 
   return (
     <Card class="shrink-0 px-[18px] pt-3 pb-4">
@@ -86,16 +113,16 @@ function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: A
         <button
           type="button"
           role="switch"
-          aria-checked={enabled()}
+          aria-checked={props.enabled}
           aria-label="Engine analysis"
-          onClick={() => setEnabled((on) => !on)}
+          onClick={() => props.onToggle()}
           class={`relative h-[20px] w-[34px] shrink-0 rounded-full transition-colors ${
-            enabled() ? "bg-rose" : "bg-plum-soft"
+            props.enabled ? "bg-rose" : "bg-plum-soft"
           }`}
         >
           <span
             class={`absolute top-[3px] left-[3px] size-[14px] rounded-full bg-white shadow transition-transform ${
-              enabled() ? "translate-x-[14px]" : ""
+              props.enabled ? "translate-x-[14px]" : ""
             }`}
           />
         </button>
@@ -111,30 +138,47 @@ function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: A
               <span class="text-[14px] font-bold text-muted">Waking up the engine…</span>
             </Match>
             <Match when={engine()}>
-              {(name) => <span class="text-[15px] font-bold whitespace-nowrap">{name()}</span>}
+              {(info) => (
+                <>
+                  <span class="text-[15px] font-bold whitespace-nowrap">{info().name}</span>
+                  <span class="truncate text-[12px] text-muted">
+                    NNUE · {info().threads} {info().threads === 1 ? "thread" : "threads"} ·{" "}
+                    {info().hashMb} MB
+                  </span>
+                </>
+              )}
             </Match>
           </Switch>
-          <span class="truncate text-[12px] text-muted">NNUE · 8 threads · 512 MB</span>
         </div>
 
-        <Show when={enabled() && props.analysis}>
+        <Show when={searching()}>
           {(analysis) => (
             <div class="ml-auto flex shrink-0 gap-1.5 font-mono text-[11px] text-ink/80">
               <span class="rounded-md bg-blush-100 px-1.5 py-0.5">
-                depth {analysis().depth}/{analysis().maxDepth}
+                depth {analysis().depth}/{analysis().seldepth}
               </span>
-              <span class="rounded-md bg-blush-100 px-1.5 py-0.5">{analysis().nodesPerSecond}</span>
+              <span class="rounded-md bg-blush-100 px-1.5 py-0.5">{formatNps(analysis().nps)}</span>
             </div>
           )}
         </Show>
       </div>
 
       <Switch>
-        <Match when={!enabled()}>
+        <Match when={!props.enabled}>
           <EmptyState>Engine paused. Flip the switch to wake it up.</EmptyState>
         </Match>
-        <Match when={!props.analysis}>
-          <EmptyState>Mochi hasn't sniffed at this position yet.</EmptyState>
+        <Match when={props.error}>
+          {(error) => (
+            <EmptyState class="text-error">
+              Mochi got tangled in the yarn: {error()}. Pick a move to try again.
+            </EmptyState>
+          )}
+        </Match>
+        <Match when={props.analysis?.outcome}>
+          {(outcome) => <EmptyState>{outcomeMessage(outcome())}</EmptyState>}
+        </Match>
+        <Match when={!props.analysis?.lines.length}>
+          <EmptyState>Mochi is sniffing at this position…</EmptyState>
         </Match>
         <Match when={props.analysis}>
           {(analysis) => (
@@ -148,12 +192,15 @@ function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: A
                       }`}
                     >
                       <span class="shrink-0 rounded-lg border border-blush-200 bg-white px-2 py-px font-mono text-[12px]">
-                        {formatEval(line.eval)}
+                        {formatScore(line.score)}
                       </span>
                       <span class="truncate text-[14px]">
-                        <For each={line.moves}>
+                        <For each={line.san.slice(0, LINE_MOVES)}>
                           {(san, i) => {
-                            const prefix = moveNumberPrefix(props.ply + i(), i() === 0);
+                            const prefix = moveNumberPrefix(
+                              fenPlyIndex(props.fen) + i(),
+                              i() === 0,
+                            );
                             return (
                               <span class={i() === 0 ? "font-bold" : ""}>
                                 {i() > 0 ? " " : ""}
@@ -174,7 +221,7 @@ function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: A
                   <CatIcon class="size-[18px]" />
                 </span>
                 <p class="mt-0.5">
-                  <span class="font-bold">Coach Mochi:</span> {analysis().coach}
+                  <span class="font-bold">Coach Mochi:</span> {coachSays(analysis())}
                 </p>
               </div>
             </>
@@ -183,6 +230,39 @@ function EngineCard(props: { engine: Resource<string>; ply: number; analysis?: A
       </Switch>
     </Card>
   );
+}
+
+function formatNps(nps: number): string {
+  if (nps >= 1e6) return `${(nps / 1e6).toFixed(1)} Mn/s`;
+  if (nps >= 1e3) return `${Math.round(nps / 1e3)} kn/s`;
+  return `${nps} n/s`;
+}
+
+function outcomeMessage(outcome: GameResult): string {
+  if (outcome === "1/2-1/2") return "Stalemate! Nobody can move, so everybody naps. ½-½";
+  return `Checkmate! ${outcome === "1-0" ? "White" : "Black"} wins. Time for a victory nap.`;
+}
+
+/** A one-line take on the best line, from the side to move's point of view. */
+function coachSays(analysis: AnalysisUpdate): string {
+  const best = analysis.lines[0];
+  const move = best.san[0];
+  const side = fenTurn(analysis.fen);
+  const name = side === "w" ? "White" : "Black";
+  const score = best.score;
+  if ("mate" in score) {
+    const moves = Math.abs(score.mate);
+    const winning = score.mate > 0 === (side === "w");
+    return winning
+      ? `There's a mate in ${moves} for ${name}. Pounce with ${move}!`
+      : `Uh oh, ${name} is getting mated in ${moves}. ${move} holds out the longest.`;
+  }
+  const share = shareFor(score, side);
+  if (share > 0.8) return `${name} is winning. ${move} keeps the claws in, nya!`;
+  if (share > 0.6) return `${name} is better here. ${move} keeps up the pressure.`;
+  if (share >= 0.4) return `Pretty balanced. Mochi would play ${move}.`;
+  if (share >= 0.2) return `${name} is a bit worse. ${move} is the toughest defence.`;
+  return `${name} is in trouble. ${move} is the best way to scramble.`;
 }
 
 const EXPLORER_SOURCES = [
