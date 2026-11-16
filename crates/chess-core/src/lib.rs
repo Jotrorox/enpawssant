@@ -3,6 +3,7 @@
 //! This crate must stay independent of Tauri so it can be tested and reused
 //! without the desktop shell.
 
+pub mod openings;
 pub mod pgn;
 pub mod uci;
 
@@ -10,7 +11,7 @@ use std::fmt;
 
 pub use shakmaty;
 use shakmaty::fen::Fen;
-use shakmaty::san::SanPlus;
+use shakmaty::san::{San, SanPlus};
 use shakmaty::uci::UciMove;
 use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, KnownOutcome, Position, PositionError};
 
@@ -117,6 +118,13 @@ impl AnalysisRoot {
         }
         line
     }
+
+    /// The move `san` from this position in standard UCI notation (castling as
+    /// `e1g1`, not `e1h1`), or `None` if it is not a legal move.
+    pub fn san_to_uci(&self, san: &str) -> Option<String> {
+        let mv = san.parse::<San>().ok()?.to_move(&self.pos).ok()?;
+        Some(mv.to_uci(CastlingMode::Standard).to_string())
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +172,19 @@ mod tests {
         let root = AnalysisRoot::from_fen(STARTING_FEN).unwrap();
         assert_eq!(sans(&root, &["e2e4", "e2e4", "d7d5"]), ["e4"]);
         assert_eq!(sans(&root, &["nonsense"]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn converts_san_to_standard_uci() {
+        let root = AnalysisRoot::from_fen(
+            "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5",
+        )
+        .unwrap();
+        assert_eq!(root.san_to_uci("O-O").as_deref(), Some("e1g1"));
+        assert_eq!(root.san_to_uci("d4").as_deref(), Some("d2d4"));
+        assert_eq!(root.san_to_uci("Nxe5").as_deref(), Some("f3e5"));
+        assert_eq!(root.san_to_uci("O-O-O"), None);
+        assert_eq!(root.san_to_uci("nonsense"), None);
     }
 
     #[test]

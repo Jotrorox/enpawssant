@@ -2,8 +2,8 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the board is fully playable, the bundled Stockfish analyses every position live
-> and games can be imported and exported as PGN, but the opening explorer is still placeholder data.
+> Early foundation: the board is fully playable, the bundled Stockfish analyses every position live,
+> games can be imported and exported as PGN and the opening explorer shows Lichess statistics.
 
 ## The board
 
@@ -53,6 +53,26 @@ PGN parsing and writing happen in Rust (`crates/chess-core/src/pgn.rs`, built on
 `pgn-reader`). File dialogs are opened from Rust too, so the frontend needs no file system or dialog
 permissions.
 
+## Opening explorer
+
+The explorer card names the opening of the current position and lists the moves played from it,
+with how often each was played and how those games ended.
+
+- **Opening names** come from the [lichess `chess-openings`](https://github.com/lichess-org/chess-openings)
+  tables (CC0), bundled in `crates/chess-core/data/openings`. They are looked up by position, so
+  transpositions are named too, and positions past the book keep the last name on the line.
+- **Masters** (over-the-board games between strong players) and **Lichess** (blitz, rapid and
+  classical games by players rated 1600 and up) come from the [Lichess explorer API](https://lichess.org/api#tag/Opening-Explorer).
+  Click a move to play it; moves already in the game tree are highlighted.
+- Lichess only answers signed-in requests, so the explorer asks you to **sign in with Lichess**
+  once. This uses OAuth with PKCE: lichess.org opens in your browser and redirects back to a
+  one-shot listener on `127.0.0.1`. The token, which grants no permissions beyond reading public
+  data, is kept in the macOS Keychain or Windows Credential Manager and never reaches the frontend.
+  **Sign out** revokes it.
+- Results are cached for the session, and requests wait until you stop stepping through moves.
+  After Lichess rate limits the app, requests pause for a minute.
+- **My games** waits for a local game database.
+
 ## Prerequisites
 
 - **[rustup](https://rustup.rs/)**: the toolchain, components (`rustfmt`, `clippy`) and macOS targets
@@ -93,7 +113,7 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 ├── mise.toml               # Node/pnpm versions and project tasks
 ├── biome.json              # TS/JSON lint + format config
 ├── crates/
-│   └── chess-core/         # Chess logic and PGN (shakmaty, pgn-reader), independent of Tauri
+│   └── chess-core/         # Chess logic, PGN and opening names, independent of Tauri
 ├── scripts/
 │   └── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 ├── src/                    # SolidJS + TypeScript frontend
@@ -105,6 +125,8 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
     │   ├── engine.rs       # Stockfish session: spawns it, runs searches, streams analysis
+    │   ├── explorer.rs     # Opening explorer and opening name commands
+    │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
     │   ├── pgn.rs          # PGN import/export commands and file dialogs
     │   └── lib.rs          # Tauri setup and commands
     └── tauri.conf.json
@@ -116,5 +138,6 @@ backend through Tauri commands such as `engine_analyze` and `pgn_parse`.
 ## License
 
 BSD 3-Clause, see [LICENSE](LICENSE). Stockfish is downloaded separately and is licensed under the GPLv3.
-The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
+The opening names come from [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings)
+(CC0). The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
 [src/assets/pieces/README.md](src/assets/pieces/README.md).
