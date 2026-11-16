@@ -8,7 +8,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { fenPlyIndex, fenTurn, moveNumberPrefix, type PieceType } from "../chess/board";
+import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
 import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
 import {
   createExplorer,
@@ -21,10 +21,13 @@ import {
   totalGames,
 } from "../chess/explorer";
 import { cancelSignIn, lichessAccount, markSignedOut, signIn, signOut } from "../chess/lichess";
+import { parseUciMove } from "../chess/rules";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
+import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
 import { Notation } from "./Notation";
+import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
 
 type PanelTab = "analysis" | "database" | "annotate" | "info";
@@ -44,6 +47,9 @@ type AnalysisPanelProps = {
   engineOn: boolean;
   engineError?: string;
   onToggleEngine: () => void;
+  /** The game against the engine in this tab, if there is one. */
+  game?: EngineGame;
+  onNewGame: () => void;
 };
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
@@ -72,15 +78,21 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
           </Card>
         }
       >
-        <EngineCard
-          engine={engine}
-          fen={fen()}
-          analysis={props.analysis}
-          enabled={props.engineOn}
-          error={props.engineError}
-          onToggle={props.onToggleEngine}
-        />
-        <ExplorerCard session={props.session} />
+        <Show when={props.game}>
+          {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
+        </Show>
+        {/* No help from the engine or the explorer while the game is on. */}
+        <Show when={!props.game?.playing()}>
+          <EngineCard
+            engine={engine}
+            fen={fen()}
+            analysis={props.analysis}
+            enabled={props.engineOn}
+            error={props.engineError}
+            onToggle={props.onToggleEngine}
+          />
+          <ExplorerCard session={props.session} />
+        </Show>
         <Notation session={props.session} score={props.score} />
       </Show>
     </div>
@@ -293,12 +305,7 @@ function ExplorerCard(props: { session: GameSession }) {
   const knownMoves = createMemo(
     () => new Set(session.node().children.map((id) => session.tree.nodes[id].move?.uci)),
   );
-  const play = (uci: string) =>
-    session.play({
-      from: uci.slice(0, 2),
-      to: uci.slice(2, 4),
-      promotion: (uci[4] as PieceType | undefined) || undefined,
-    });
+  const play = (uci: string) => session.play(parseUciMove(uci));
 
   return (
     <Card class="shrink-0 px-[18px] pt-3 pb-3">

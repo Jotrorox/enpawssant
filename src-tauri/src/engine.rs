@@ -11,6 +11,10 @@
 //! request asks for one (full-game analysis does). Either way its channel ends
 //! with a `done` event that says whether the search ran its course.
 //!
+//! Games against the engine use a second session of their own (the
+//! [`Opponent`]), so its playing strength never touches the analysis. Its
+//! searches play a move under a clock and end with the move in `done`.
+//!
 //! Switching positions has to wait for the engine: after `stop`, Stockfish still
 //! prints `info` lines for the old search until its `bestmove`. The actor drops
 //! those lines and only then starts the next search. Requests that arrive in
@@ -22,7 +26,7 @@ use std::time::{Duration, Instant};
 use chess_core::shakmaty::KnownOutcome;
 use chess_core::uci::{self, Info, Score};
 use chess_core::{AnalysisRoot, LineMove};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::async_runtime::{self, Receiver};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime};
@@ -39,9 +43,38 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Snapshots are sent at most this often; Stockfish prints far more lines.
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
-const HASH_MB: u32 = 256;
 const MAX_MULTIPV: u32 = 5;
 const MAX_DEPTH: u32 = 99;
+/// How long the opponent thinks per move in games without a clock.
+const UNTIMED_MOVE_TIME: Duration = Duration::from_secs(1);
+/// Stockfish's top skill level, which is full strength.
+const FULL_SKILL: i64 = 20;
+const ELO_OPTION: &str = "UCI_Elo";
+const SKILL_OPTION: &str = "Skill Level";
+
+/// How a session sets up its engine.
+#[derive(Copy, Clone, Debug)]
+struct Config {
+    /// Use every core but one, leaving it for the UI; otherwise one thread.
+    all_cores: bool,
+    hash_mb: u32,
+    /// Time the engine keeps in reserve per move for the trip to the UI and back.
+    move_overhead_ms: Option<u32>,
+}
+
+/// Analysis gets the machine.
+const ANALYSIS: Config = Config {
+    all_cores: true,
+    hash_mb: 256,
+    move_overhead_ms: None,
+};
+/// A limited opponent needs little, and leaves the cores to the analysis.
+const OPPONENT: Config = Config {
+    all_cores: false,
+    hash_mb: 32,
+    // The game clock runs in the frontend, which sees the move a little later.
+    move_overhead_ms: Some(100),
+};
 
 /// What the frontend shows about the running engine.
 #[derive(Clone, Debug, Serialize)]
@@ -50,6 +83,102 @@ pub struct EngineInfo {
     name: String,
     threads: u32,
     hash_mb: u32,
+    /// The Elo range the engine can limit itself to, if it can.
+    elo: Option<StrengthRange>,
+    /// The range of its skill levels, if it has them.
+    skill: Option<StrengthRange>,
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
+pub struct StrengthRange {
+    min: i64,
+    max: i64,
+    default: i64,
+}
+
+impl From<uci::SpinOption> for StrengthRange {
+    fn from(option: uci::SpinOption) -> Self {
+        StrengthRange {
+            min: option.min,
+            max: option.max,
+            default: option.default,
+        }
+    }
+}
+
+/// How strongly the opponent plays.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Strength {
+    Full,
+    /// `UCI_LimitStrength` with this `UCI_Elo`.
+    Elo(i64),
+    /// This `Skill Level`.
+    Skill(i64),
+}
+
+impl Strength {
+    /// The same strength within what the engine supports.
+    fn clamped(self, info: &EngineInfo) -> Strength {
+        let clamp = |value: i64, range: Option<StrengthRange>| {
+            range.map_or(value, |r| value.clamp(r.min, r.max))
+        };
+        match self {
+            Strength::Full => Strength::Full,
+            Strength::Elo(elo) => Strength::Elo(clamp(elo, info.elo)),
+            Strength::Skill(level) => Strength::Skill(clamp(level, info.skill)),
+        }
+    }
+
+    /// The `setoption` commands that switch the engine to this strength.
+    fn options(self) -> [String; 2] {
+        let limit = |on: bool| format!("setoption name UCI_LimitStrength value {on}");
+        let skill = |level: i64| format!("setoption name {SKILL_OPTION} value {level}");
+        match self {
+            Strength::Full => [limit(false), skill(FULL_SKILL)],
+            // With the limit on, Stockfish goes by the Elo and ignores the skill level.
+            Strength::Elo(elo) => [
+                limit(true),
+                format!("setoption name {ELO_OPTION} value {elo}"),
+            ],
+            Strength::Skill(level) => [limit(false), skill(level)],
+        }
+    }
+}
+
+/// Both players' remaining time and increment, in milliseconds.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Clock {
+    white_ms: u64,
+    black_ms: u64,
+    white_inc_ms: u64,
+    black_inc_ms: u64,
+}
+
+/// How long a search runs.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Go {
+    /// Until it is replaced or stopped.
+    Infinite,
+    Depth(u32),
+    /// As long as the engine's time management decides.
+    Clock(Clock),
+    MoveTime(Duration),
+}
+
+impl Go {
+    fn command(self) -> String {
+        match self {
+            Go::Infinite => "go infinite".into(),
+            Go::Depth(depth) => format!("go depth {depth}"),
+            Go::Clock(c) => format!(
+                "go wtime {} btime {} winc {} binc {}",
+                c.white_ms, c.black_ms, c.white_inc_ms, c.black_inc_ms
+            ),
+            Go::MoveTime(time) => format!("go movetime {}", time.as_millis()),
+        }
+    }
 }
 
 /// A message on the channel of an `analyze` request.
@@ -58,9 +187,12 @@ pub struct EngineInfo {
 pub enum EngineEvent {
     Update(AnalysisUpdate),
     /// The search is over. `complete` is false when it was replaced or stopped
-    /// before reaching its depth; searches without a depth never complete.
+    /// before it ended on its own; searches without a limit never complete.
     Done {
         complete: bool,
+        /// The move the engine chose, in UCI notation, when the search completed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bestmove: Option<String>,
     },
     /// The engine failed. The search is over; the next request restarts it.
     Error {
@@ -116,10 +248,25 @@ impl From<Score> for WireScore {
     }
 }
 
-/// Tauri state holding the engine session, if one is running.
-#[derive(Default)]
+/// Tauri state holding the analysis engine session, if one is running.
 pub struct Engine {
     session: Mutex<Option<Session>>,
+    config: Config,
+}
+
+/// Tauri state holding the engine session that games are played against.
+pub struct Opponent(pub Engine);
+
+impl Opponent {
+    pub fn new() -> Self {
+        Opponent(Engine::with_config(OPPONENT))
+    }
+}
+
+impl Default for Opponent {
+    fn default() -> Self {
+        Opponent::new()
+    }
 }
 
 struct Session {
@@ -128,7 +275,7 @@ struct Session {
 }
 
 enum Command {
-    Analyze(Request),
+    Analyze(Box<Request>),
     Stop,
     Quit(oneshot::Sender<()>),
 }
@@ -137,23 +284,59 @@ struct Request {
     fen: String,
     root: AnalysisRoot,
     multipv: u32,
-    /// Search to this depth instead of until told otherwise.
-    depth: Option<u32>,
+    go: Go,
+    strength: Strength,
+    /// Sends `ucinewgame` first, so the engine forgets the last game.
+    new_game: bool,
     channel: Channel<EngineEvent>,
 }
 
 impl Request {
-    fn send_done(&self, complete: bool) {
+    fn analysis(
+        fen: String,
+        root: AnalysisRoot,
+        multipv: u32,
+        go: Go,
+        channel: Channel<EngineEvent>,
+    ) -> Self {
+        Request {
+            fen,
+            root,
+            multipv,
+            go,
+            strength: Strength::Full,
+            new_game: false,
+            channel,
+        }
+    }
+
+    fn send_done(&self, complete: bool, bestmove: Option<String>) {
         // A closed channel means the frontend moved on.
-        let _ = self.channel.send(EngineEvent::Done { complete });
+        let _ = self.channel.send(EngineEvent::Done { complete, bestmove });
+    }
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Engine::with_config(ANALYSIS)
     }
 }
 
 impl Engine {
+    fn with_config(config: Config) -> Self {
+        Engine {
+            session: Mutex::new(None),
+            config,
+        }
+    }
+
     /// Starts the engine if needed and describes it.
     pub async fn info<R: Runtime>(&self, app: &AppHandle<R>) -> Result<EngineInfo, String> {
         let mut session = self.session.lock().await;
-        Ok(ensure_session(&mut session, app).await?.info.clone())
+        Ok(ensure_session(&mut session, app, self.config)
+            .await?
+            .info
+            .clone())
     }
 
     /// Searches `fen` to `depth`, or until told otherwise without one,
@@ -167,17 +350,46 @@ impl Engine {
         channel: Channel<EngineEvent>,
     ) -> Result<(), String> {
         let root = AnalysisRoot::from_fen(&fen).map_err(|e| e.to_string())?;
-        let mut command = Command::Analyze(Request {
+        let go = depth.map_or(Go::Infinite, |d| Go::Depth(d.clamp(1, MAX_DEPTH)));
+        let request = Request::analysis(fen, root, multipv.clamp(1, MAX_MULTIPV), go, channel);
+        self.submit(app, request).await
+    }
+
+    /// Picks a move for the position after `moves` from `fen`, at `strength`
+    /// and under `clock` (or briefly without one). The move arrives in the
+    /// `done` event; the search can be stopped like any other.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn play<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        fen: String,
+        moves: Vec<String>,
+        strength: Strength,
+        clock: Option<Clock>,
+        new_game: bool,
+        channel: Channel<EngineEvent>,
+    ) -> Result<(), String> {
+        let root = AnalysisRoot::from_fen_and_moves(&fen, &moves).map_err(|e| e.to_string())?;
+        let info = self.info(app).await?;
+        let request = Request {
             fen,
             root,
-            multipv: multipv.clamp(1, MAX_MULTIPV),
-            depth: depth.map(|d| d.clamp(1, MAX_DEPTH)),
+            multipv: 1,
+            go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
+            strength: strength.clamped(&info),
+            new_game,
             channel,
-        });
+        };
+        self.submit(app, request).await
+    }
+
+    /// Hands a request to the session, starting the engine if needed.
+    async fn submit<R: Runtime>(&self, app: &AppHandle<R>, request: Request) -> Result<(), String> {
+        let mut command = Command::Analyze(Box::new(request));
         let mut session = self.session.lock().await;
         // A second attempt covers an engine that died since the last request.
         for _ in 0..2 {
-            match ensure_session(&mut session, app)
+            match ensure_session(&mut session, app, self.config)
                 .await?
                 .commands
                 .send(command)
@@ -216,17 +428,18 @@ impl Engine {
 async fn ensure_session<'a, R: Runtime>(
     slot: &'a mut Option<Session>,
     app: &AppHandle<R>,
+    config: Config,
 ) -> Result<&'a Session, String> {
     if slot.as_ref().is_some_and(|s| s.commands.is_closed()) {
         *slot = None;
     }
     if slot.is_none() {
-        *slot = Some(spawn_session(app).await?);
+        *slot = Some(spawn_session(app, config).await?);
     }
     Ok(slot.as_ref().expect("session was just set"))
 }
 
-async fn spawn_session<R: Runtime>(app: &AppHandle<R>) -> Result<Session, String> {
+async fn spawn_session<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<Session, String> {
     let (mut events, mut child) = app
         .shell()
         .sidecar(SIDECAR)
@@ -235,19 +448,30 @@ async fn spawn_session<R: Runtime>(app: &AppHandle<R>) -> Result<Session, String
         .spawn()
         .map_err(|e| format!("could not start the engine: {e}"))?;
 
-    // Leave a core for the UI.
-    let threads = std::thread::available_parallelism()
-        .map_or(1, |n| n.get().saturating_sub(1).max(1))
-        .try_into()
-        .unwrap_or(1);
+    let threads = if config.all_cores {
+        // Leave a core for the UI.
+        std::thread::available_parallelism()
+            .map_or(1, |n| n.get().saturating_sub(1).max(1))
+            .try_into()
+            .unwrap_or(1)
+    } else {
+        1
+    };
+    let hash_mb = config.hash_mb;
 
-    let name = timeout(HANDSHAKE_TIMEOUT, async {
+    let info = timeout(HANDSHAKE_TIMEOUT, async {
         send(&mut child, "uci")?;
-        let mut name = None;
+        let (mut name, mut elo, mut skill) = (None, None, None);
         loop {
             let line = next_line(&mut events).await?;
             if let Some(value) = uci::parse_id_name(&line) {
                 name = Some(value.to_owned());
+            } else if let Some((option, range)) = uci::parse_spin_option(&line) {
+                match option {
+                    ELO_OPTION => elo = Some(range.into()),
+                    SKILL_OPTION => skill = Some(range.into()),
+                    _ => {}
+                }
             } else if line == "uciok" {
                 break;
             }
@@ -256,24 +480,29 @@ async fn spawn_session<R: Runtime>(app: &AppHandle<R>) -> Result<Session, String
             &mut child,
             &format!("setoption name Threads value {threads}"),
         )?;
-        send(&mut child, &format!("setoption name Hash value {HASH_MB}"))?;
+        send(&mut child, &format!("setoption name Hash value {hash_mb}"))?;
+        if let Some(overhead) = config.move_overhead_ms {
+            send(
+                &mut child,
+                &format!("setoption name Move Overhead value {overhead}"),
+            )?;
+        }
         send(&mut child, "isready")?;
         while next_line(&mut events).await? != "readyok" {}
-        name.ok_or_else(|| "the engine sent `uciok` without `id name`".to_string())
+        Ok::<_, String>(EngineInfo {
+            name: name.ok_or_else(|| "the engine sent `uciok` without `id name`".to_string())?,
+            threads,
+            hash_mb,
+            elo,
+            skill,
+        })
     })
     .await
     .map_err(|_| "the engine did not get ready in time".to_string())??;
 
     let (commands, receiver) = mpsc::unbounded_channel();
     async_runtime::spawn(Actor::new(child, events).run(receiver));
-    Ok(Session {
-        commands,
-        info: EngineInfo {
-            name,
-            threads,
-            hash_mb: HASH_MB,
-        },
-    })
+    Ok(Session { commands, info })
 }
 
 fn send(child: &mut CommandChild, command: &str) -> Result<(), String> {
@@ -395,12 +624,12 @@ impl Search {
         self.dirty = true;
     }
 
-    /// Sends the final snapshot of a search that ran its course.
-    fn finish(mut self) {
+    /// Sends the final snapshot of a search that ran its course, and its move.
+    fn finish(mut self, bestmove: Option<&str>) {
         // The engine is done printing, so the last burst is as complete as it gets.
         self.rest_of_burst = false;
         self.flush();
-        self.request.send_done(true);
+        self.request.send_done(true, bestmove.map(str::to_owned));
     }
 
     /// Sends a snapshot if anything changed since the last one.
@@ -429,6 +658,7 @@ struct Actor<I> {
     events: Receiver<CommandEvent>,
     state: State,
     multipv: u32,
+    strength: Strength,
 }
 
 impl<I: EngineInput> Actor<I> {
@@ -437,7 +667,9 @@ impl<I: EngineInput> Actor<I> {
             input,
             events,
             state: State::Idle,
+            // The engine's defaults.
             multipv: 1,
+            strength: Strength::Full,
         }
     }
 
@@ -492,6 +724,7 @@ impl<I: EngineInput> Actor<I> {
     fn handle(&mut self, command: Command) -> Result<(), String> {
         match command {
             Command::Analyze(request) => {
+                let request = *request;
                 if let Some(outcome) = request.root.final_outcome() {
                     send_final(&request, outcome);
                     return self.stop_search();
@@ -499,7 +732,7 @@ impl<I: EngineInput> Actor<I> {
                 match mem::replace(&mut self.state, State::Idle) {
                     State::Idle => self.start(request)?,
                     State::Searching(search) => {
-                        search.request.send_done(false);
+                        search.request.send_done(false, None);
                         self.send("stop")?;
                         self.state = State::Stopping {
                             since: Instant::now(),
@@ -508,7 +741,7 @@ impl<I: EngineInput> Actor<I> {
                     }
                     State::Stopping { since, next } => {
                         if let Some(replaced) = next {
-                            replaced.send_done(false);
+                            replaced.send_done(false, None);
                         }
                         self.state = State::Stopping {
                             since,
@@ -527,7 +760,7 @@ impl<I: EngineInput> Actor<I> {
         self.state = match mem::replace(&mut self.state, State::Idle) {
             State::Idle => State::Idle,
             State::Searching(search) => {
-                search.request.send_done(false);
+                search.request.send_done(false, None);
                 self.send("stop")?;
                 State::Stopping {
                     since: Instant::now(),
@@ -536,7 +769,7 @@ impl<I: EngineInput> Actor<I> {
             }
             State::Stopping { since, next } => {
                 if let Some(dropped) = next {
-                    dropped.send_done(false);
+                    dropped.send_done(false, None);
                 }
                 State::Stopping { since, next: None }
             }
@@ -550,11 +783,17 @@ impl<I: EngineInput> Actor<I> {
             self.send(&format!("setoption name MultiPV value {}", request.multipv))?;
             self.multipv = request.multipv;
         }
-        self.send(&format!("position fen {}", request.root.fen()))?;
-        match request.depth {
-            Some(depth) => self.send(&format!("go depth {depth}"))?,
-            None => self.send("go infinite")?,
+        if request.strength != self.strength {
+            for option in request.strength.options() {
+                self.send(&option)?;
+            }
+            self.strength = request.strength;
         }
+        if request.new_game {
+            self.send("ucinewgame")?;
+        }
+        self.send(&request.root.uci_position())?;
+        self.send(&request.go.command())?;
         self.state = State::Searching(Search::new(request));
         Ok(())
     }
@@ -566,8 +805,8 @@ impl<I: EngineInput> Actor<I> {
                     next: Some(request),
                     ..
                 } => self.start(request)?,
-                // The search reached its depth.
-                State::Searching(search) => search.finish(),
+                // The search reached its limit.
+                State::Searching(search) => search.finish(uci::parse_bestmove(line)),
                 State::Stopping { next: None, .. } | State::Idle => {}
             }
         } else if let State::Searching(search) = &mut self.state
@@ -633,7 +872,7 @@ fn send_final(request: &Request, outcome: KnownOutcome) {
         outcome: Some(outcome.as_str()),
     };
     let _ = request.channel.send(EngineEvent::Update(update));
-    request.send_done(true);
+    request.send_done(true, None);
 }
 
 #[cfg(test)]
@@ -693,21 +932,40 @@ mod tests {
             multipv: u32,
             depth: Option<u32>,
         ) -> mpsc::UnboundedReceiver<Value> {
-            let (sender, events) = mpsc::unbounded_channel();
-            let channel = Channel::new(move |body| {
-                if let InvokeResponseBody::Json(json) = body {
-                    let _ = sender.send(serde_json::from_str(&json).unwrap());
-                }
-                Ok(())
-            });
+            let (channel, events) = test_channel();
+            let go = depth.map_or(Go::Infinite, Go::Depth);
+            let root = AnalysisRoot::from_fen(fen).unwrap();
+            let request = Request::analysis(fen.to_owned(), root, multipv, go, channel);
+            assert!(
+                self.commands
+                    .send(Command::Analyze(Box::new(request)))
+                    .is_ok()
+            );
+            events
+        }
+
+        fn play(
+            &self,
+            moves: &[&str],
+            strength: Strength,
+            clock: Option<Clock>,
+            new_game: bool,
+        ) -> mpsc::UnboundedReceiver<Value> {
+            let (channel, events) = test_channel();
             let request = Request {
-                fen: fen.to_owned(),
-                root: AnalysisRoot::from_fen(fen).unwrap(),
-                multipv,
-                depth,
+                fen: START.to_owned(),
+                root: AnalysisRoot::from_fen_and_moves(START, moves).unwrap(),
+                multipv: 1,
+                go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
+                strength,
+                new_game,
                 channel,
             };
-            assert!(self.commands.send(Command::Analyze(request)).is_ok());
+            assert!(
+                self.commands
+                    .send(Command::Analyze(Box::new(request)))
+                    .is_ok()
+            );
             events
         }
 
@@ -727,6 +985,18 @@ mod tests {
             tokio::time::sleep(UPDATE_INTERVAL * 3).await;
             assert_eq!(self.written.try_recv().ok(), None);
         }
+    }
+
+    /// A Tauri channel whose messages arrive on the returned receiver.
+    fn test_channel() -> (Channel<EngineEvent>, mpsc::UnboundedReceiver<Value>) {
+        let (sender, events) = mpsc::unbounded_channel();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                let _ = sender.send(serde_json::from_str(&json).unwrap());
+            }
+            Ok(())
+        });
+        (channel, events)
     }
 
     /// Waits for an event matching `accept`, skipping earlier ones.
@@ -889,6 +1159,73 @@ mod tests {
     }
 
     #[test]
+    fn plays_moves_at_a_limited_strength() {
+        async_runtime::block_on(async {
+            let mut h = Harness::start();
+            let clock = Clock {
+                white_ms: 180_000,
+                black_ms: 175_500,
+                white_inc_ms: 2000,
+                black_inc_ms: 2000,
+            };
+            let mut events = h.play(&["e2e4"], Strength::Elo(1500), Some(clock), true);
+            h.expect_written(&[
+                "setoption name UCI_LimitStrength value true",
+                "setoption name UCI_Elo value 1500",
+                "ucinewgame",
+                &format!("position fen {START} moves e2e4"),
+                "go wtime 180000 btime 175500 winc 2000 binc 2000",
+            ])
+            .await;
+            h.say("info depth 6 score cp -30 pv c7c5 g1f3").await;
+            h.say("bestmove c7c5 ponder g1f3").await;
+            let done = next_event(&mut events, |e| e["type"] == "done").await;
+            assert_eq!(
+                done,
+                json!({ "type": "done", "complete": true, "bestmove": "c7c5" })
+            );
+
+            // Options are only sent when they change.
+            let _events = h.play(&["e2e4", "c7c5", "g1f3"], Strength::Elo(1500), None, false);
+            h.expect_written(&[
+                &format!("position fen {START} moves e2e4 c7c5 g1f3"),
+                "go movetime 1000",
+            ])
+            .await;
+            h.say("bestmove d7d6").await;
+
+            // Analysis afterwards gets the engine back at full strength.
+            let _events = h.analyze(START, 1);
+            h.expect_written(&[
+                "setoption name UCI_LimitStrength value false",
+                "setoption name Skill Level value 20",
+                &format!("position fen {START}"),
+                "go infinite",
+            ])
+            .await;
+        });
+    }
+
+    #[test]
+    fn clamps_strengths_to_what_the_engine_supports() {
+        let info = EngineInfo {
+            name: "Stockfish".into(),
+            threads: 1,
+            hash_mb: 16,
+            elo: Some(StrengthRange {
+                min: 1320,
+                max: 3190,
+                default: 1320,
+            }),
+            skill: None,
+        };
+        assert_eq!(Strength::Elo(800).clamped(&info), Strength::Elo(1320));
+        assert_eq!(Strength::Elo(2000).clamped(&info), Strength::Elo(2000));
+        assert_eq!(Strength::Skill(99).clamped(&info), Strength::Skill(99));
+        assert_eq!(Strength::Full.clamped(&info), Strength::Full);
+    }
+
+    #[test]
     fn finished_games_are_answered_without_searching() {
         async_runtime::block_on(async {
             let mut h = Harness::start();
@@ -1009,6 +1346,19 @@ mod tests {
             assert_eq!(done["complete"], true);
             let updates = drain(&mut events);
             assert!(updates.is_empty(), "nothing follows `done`: {updates:?}");
+
+            // A limited-strength move under the clock comes back as `bestmove`.
+            let clock = Clock {
+                white_ms: 5000,
+                black_ms: 5000,
+                white_inc_ms: 0,
+                black_inc_ms: 0,
+            };
+            let mut events = h.play(&["e2e4"], Strength::Elo(1500), Some(clock), true);
+            let done = next_event_within(patience, &mut events, |e| e["type"] == "done").await;
+            assert_eq!(done["complete"], true);
+            let reply = done["bestmove"].as_str().unwrap();
+            assert_eq!(reply.chars().nth(1), Some('7'), "Black replies: {reply}");
 
             let (done, exited) = oneshot::channel();
             assert!(h.commands.send(Command::Quit(done)).is_ok());

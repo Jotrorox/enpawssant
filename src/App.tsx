@@ -8,9 +8,11 @@ import type { NodeId } from "./chess/tree";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
+import { type NewGame, PlayDialog } from "./components/PlayDialog";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
+import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/play";
 import { createGameSession, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
 
@@ -19,14 +21,30 @@ const ENGINE_LINES = 3;
 /** Depth every position is searched to by "Analyze full game". */
 const REVIEW_DEPTH = 16;
 
-/** A workspace tab and the game open in it. */
-type Tab = WorkspaceTab & { session: GameSession };
+/** A workspace tab, the game open in it and the game being played against the engine there. */
+type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame };
 
 export default function App() {
   let opened = 0;
   const createTab = (game: PgnGame, title = gameTitle(game), position?: number[]): Tab => {
     opened += 1;
     return { id: `game-${opened}`, title, session: createGameSession(game, { position }) };
+  };
+  /** A tab for a new game against the engine; it is marked live while the game is on. */
+  const createEngineGameTab = ({ settings, startFen, engineName }: NewGame): Tab => {
+    const tab = createTab({
+      headers: engineGameHeaders(settings, engineName),
+      startFen,
+      moves: [],
+    });
+    const game = createEngineGame(tab.session, settings);
+    return {
+      ...tab,
+      game,
+      get live() {
+        return game.playing();
+      },
+    };
   };
   const createBoard = () => createTab({ headers: [], startFen: START_FEN, moves: [] }, "New board");
 
@@ -48,6 +66,7 @@ export default function App() {
   const activeTab = () => tabs().find((tab) => tab.id === activeId());
   const [importing, setImporting] = createSignal(false);
   const [exporting, setExporting] = createSignal(false);
+  const [choosingGame, setChoosingGame] = createSignal(false);
 
   // Save on every change to the open games, positions or tab selection. A game is small, so
   // writing it all again is cheap and nothing is lost when the window closes.
@@ -71,6 +90,7 @@ export default function App() {
     const remaining = tabs().filter((tab) => tab.id !== id);
     if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
+    closing?.game?.dispose();
     closing?.session.dispose();
   };
 
@@ -117,8 +137,10 @@ export default function App() {
             {(tab) => (
               <GameWorkspace
                 session={tab.session}
+                game={tab.game}
                 onImport={() => setImporting(true)}
                 onExport={() => setExporting(true)}
+                onPlay={() => setChoosingGame(true)}
               />
             )}
           </Show>
@@ -134,21 +156,36 @@ export default function App() {
         session={activeTab()?.session}
         onClose={() => setExporting(false)}
       />
+      <PlayDialog
+        open={choosingGame()}
+        currentFen={activeTab()?.session.node().fen}
+        onClose={() => setChoosingGame(false)}
+        onStart={(game) => openTabs([createEngineGameTab(game)])}
+      />
     </div>
   );
 }
 
 function GameWorkspace(props: {
   session: GameSession;
+  game?: EngineGame;
   onImport: () => void;
   onExport: () => void;
+  onPlay: () => void;
 }) {
   const session = props.session;
-  const [orientation, setOrientation] = createSignal<Color>("w");
+  const game = props.game;
+  const [orientation, setOrientation] = createSignal<Color>(game?.settings.color ?? "w");
   const fen = () => session.node().fen;
+  /** The engine keeps its opinions to itself while a game against it is on. */
+  const playing = () => game?.playing() ?? false;
 
   const [engineOn, setEngineOn] = createSignal(true);
-  const engine = createEngineAnalysis({ fen, enabled: engineOn, multipv: ENGINE_LINES });
+  const engine = createEngineAnalysis({
+    fen,
+    enabled: () => engineOn() && !playing(),
+    multipv: ENGINE_LINES,
+  });
   const analysis = () => engine.analysisOf(fen());
   /** The engine's evaluation of a node, or else the one the game was imported with. */
   const scoreOf = (id: string) => {
@@ -156,7 +193,7 @@ function GameWorkspace(props: {
     return positionScore(engine.analysisOf(node.fen)) ?? node.eval;
   };
   // Positions without either stay empty in the eval graph.
-  const evals = createMemo(() => session.line().map(scoreOf));
+  const evals = createMemo(() => session.line().map((id) => (playing() ? undefined : scoreOf(id))));
 
   /** Searches every main-line position to a fixed depth, then stores and judges the results. */
   const reviewGame = async () => {
@@ -176,7 +213,7 @@ function GameWorkspace(props: {
 
   const arrows = createMemo(() => {
     const current = analysis();
-    return engineOn() && current ? lineArrows(current) : [];
+    return engineOn() && !playing() && current ? lineArrows(current) : [];
   });
 
   onMount(() => {
@@ -220,21 +257,25 @@ function GameWorkspace(props: {
         orientation={orientation()}
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={session.goToIndex}
-        onMove={session.play}
+        onMove={game ? (game.canMove() ? game.move : undefined) : session.play}
         onImport={props.onImport}
         onExport={props.onExport}
+        onPlay={props.onPlay}
         review={engine.reviewProgress()}
         reviewError={engine.reviewError()}
+        reviewDisabled={playing()}
         onReview={() => void reviewGame()}
         onCancelReview={engine.cancelReview}
       />
       <AnalysisPanel
         session={session}
         analysis={analysis()}
-        score={scoreOf(session.currentId())}
+        score={playing() ? undefined : scoreOf(session.currentId())}
         engineOn={engineOn()}
         engineError={engine.error()}
         onToggleEngine={() => setEngineOn((on) => !on)}
+        game={game}
+        onNewGame={props.onPlay}
       />
     </div>
   );
