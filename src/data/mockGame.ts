@@ -1,15 +1,6 @@
-// Placeholder data for the game view until games and the opening explorer are wired to the
-// backend.
+// A sample game for tests.
 
 import type { PgnGame } from "../chess/pgn";
-
-export type ExplorerRow = {
-  move: string;
-  games: number;
-  white: number;
-  draw: number;
-  black: number;
-};
 
 /** The sample game, in the shape the Rust PGN reader produces. Evaluations come from the engine. */
 export const sampleGame: PgnGame = {
@@ -98,27 +89,4 @@ export const sampleGame: PgnGame = {
       fen: "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5",
     },
   ],
-};
-
-/** The position the placeholder explorer data belongs to (the end of the sample game). */
-export const EXPLORER_FEN =
-  "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5";
-
-export type ExplorerSource = "masters" | "online" | "mine";
-
-/** Opening explorer results keyed by source, for the final position only. */
-export const explorer: Record<ExplorerSource, ExplorerRow[]> = {
-  masters: [
-    { move: "d4", games: 12408, white: 38, draw: 31, black: 31 },
-    { move: "d3", games: 9870, white: 36, draw: 35, black: 29 },
-    { move: "b4", games: 2113, white: 40, draw: 27, black: 33 },
-    { move: "O-O", games: 1204, white: 35, draw: 30, black: 35 },
-  ],
-  online: [
-    { move: "d4", games: 184_220, white: 49, draw: 6, black: 45 },
-    { move: "d3", games: 141_032, white: 48, draw: 6, black: 46 },
-    { move: "O-O", games: 51_870, white: 47, draw: 5, black: 48 },
-    { move: "b4", games: 22_415, white: 50, draw: 4, black: 46 },
-  ],
-  mine: [],
 };

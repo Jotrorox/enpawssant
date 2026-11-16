@@ -1,5 +1,11 @@
 import { For, type JSX, splitProps } from "solid-js";
 
+/** Class names for a main action button and a secondary one. */
+export const PRIMARY_BUTTON =
+  "flex h-9 items-center gap-2 rounded-xl bg-blush-400 px-4 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400";
+export const SECONDARY_BUTTON =
+  "flex h-9 items-center gap-2 rounded-xl bg-blush-100 px-4 text-[14px] font-bold whitespace-nowrap text-ink transition-colors hover:bg-blush-200 disabled:opacity-50";
+
 export function Card(props: JSX.HTMLAttributes<HTMLElement>) {
   const [local, rest] = splitProps(props, ["class", "children"]);
   return (

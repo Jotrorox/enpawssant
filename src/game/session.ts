@@ -12,10 +12,12 @@ import {
   addMove,
   deleteNode,
   type GameTree,
+  indexPath,
   lineEnd,
   type MoveNode,
   makeMainline,
   type NodeId,
+  nodeAtIndexPath,
   pathTo,
   treeFromPgn,
   treeToPgn,
@@ -34,17 +36,22 @@ export type GameInfo = {
 
 export type GameSession = ReturnType<typeof createGameSession>;
 
+export type SessionOptions = {
+  /** Where to start, as an `indexPath`; defaults to the starting position. */
+  position?: number[];
+};
+
 /** Creates a session for `game`. Call `dispose` when its tab closes. */
-export function createGameSession(game: PgnGame) {
+export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
   return createRoot((dispose) => {
     const [tree, setTree] = createStore<GameTree>(treeFromPgn(game));
     const [headers] = createSignal(game.headers);
-    const [currentId, setCurrentId] = createSignal(tree.rootId);
+    const [currentId, setCurrentId] = createSignal(nodeAtIndexPath(tree, options.position ?? []));
     /**
      * The last node of the line shown in the toolbar and eval graph. It stays put while stepping
      * back, so stepping forward again retraces a variation instead of jumping to the main line.
      */
-    const [lineEndId, setLineEndId] = createSignal(lineEnd(tree, tree.rootId));
+    const [lineEndId, setLineEndId] = createSignal(lineEnd(tree, currentId()));
 
     const node = (): MoveNode => tree.nodes[currentId()];
     const line = createMemo(() => pathTo(tree, lineEndId()));
@@ -150,6 +157,8 @@ export function createGameSession(game: PgnGame) {
       remove,
       promote,
       toPgn: () => treeToPgn(tree, headers()),
+      /** The current node as an `indexPath`, for restoring it later. */
+      position: () => indexPath(tree, currentId()),
       dispose,
     };
   });
