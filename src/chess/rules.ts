@@ -364,12 +364,18 @@ function toSan(pos: Position, move: Move): string {
   return san;
 }
 
-/** Plays a move on a FEN, returning its SAN and the resulting FEN, or `undefined` if illegal. */
-export function makeMove(fen: string, input: MoveInput): { san: string; fen: string } | undefined {
+/**
+ * Plays a move on a FEN, returning its SAN, UCI and the resulting FEN, or `undefined` if illegal.
+ */
+export function makeMove(
+  fen: string,
+  input: MoveInput,
+): { san: string; uci: string; fen: string } | undefined {
   const pos = parseFen(fen);
   const move = findMove(pos, input);
   if (!move) return undefined;
-  return { san: toSan(pos, move), fen: toFen(playMove(pos, move)) };
+  const uci = `${squareName(move.from)}${squareName(move.to)}${move.promotion ?? ""}`;
+  return { san: toSan(pos, move), uci, fen: toFen(playMove(pos, move)) };
 }
 
 /** Number of leaf nodes `depth` plies deep, for testing move generation. */

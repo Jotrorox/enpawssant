@@ -10,6 +10,8 @@ export type Arrow = { from: Square; to: Square; strength: number };
 
 export const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
+export const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
 /** Placement of a FEN as a map from square name to piece. */
 export function parsePlacement(fen: string): Map<Square, Piece> {
   const pieces = new Map<Square, Piece>();

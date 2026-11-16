@@ -1,21 +1,9 @@
 import { createResource, createSignal, For, Match, type Resource, Show, Switch } from "solid-js";
 import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
-import {
-  type AnalysisUpdate,
-  type EngineInfo,
-  fetchEngineInfo,
-  positionScore,
-} from "../chess/engine";
-import { formatScore, type GameResult, shareFor } from "../chess/score";
-import {
-  EXPLORER_FEN,
-  type ExplorerRow,
-  type ExplorerSource,
-  explorer,
-  type Game,
-  type GameMove,
-  type Nag,
-} from "../data/mockGame";
+import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
+import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
+import { EXPLORER_FEN, type ExplorerRow, type ExplorerSource, explorer } from "../data/mockGame";
+import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
 import { Notation } from "./Notation";
 import { Card, CardTitle, EmptyState, Segmented } from "./ui";
@@ -30,19 +18,17 @@ const PANEL_TABS = [
 ] as const;
 
 type AnalysisPanelProps = {
-  game: Game;
-  moves: GameMove[];
-  ply: number;
-  fen: string;
+  session: GameSession;
   analysis?: AnalysisUpdate;
+  /** Evaluation of the current position: the engine's, or the one the game was imported with. */
+  score?: Score;
   engineOn: boolean;
   engineError?: string;
   onToggleEngine: () => void;
-  onPly: (ply: number) => void;
-  onToggleNag: (nag: Nag) => void;
 };
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
+  const fen = () => props.session.node().fen;
   const [tab, setTab] = createSignal<PanelTab>("analysis");
   // Lives here rather than in the engine card so switching panels doesn't restart the engine.
   const [engine] = createResource(fetchEngineInfo);
@@ -69,22 +55,14 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
       >
         <EngineCard
           engine={engine}
-          fen={props.fen}
+          fen={fen()}
           analysis={props.analysis}
           enabled={props.engineOn}
           error={props.engineError}
           onToggle={props.onToggleEngine}
         />
-        <ExplorerCard hasData={props.fen === EXPLORER_FEN} />
-        <Notation
-          moves={props.moves}
-          variations={props.game.variations}
-          ply={props.ply}
-          fen={props.fen}
-          score={positionScore(props.analysis)}
-          onPly={props.onPly}
-          onToggleNag={props.onToggleNag}
-        />
+        <ExplorerCard hasData={fen() === EXPLORER_FEN} />
+        <Notation session={props.session} score={props.score} />
       </Show>
     </div>
   );

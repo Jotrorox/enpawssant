@@ -1,27 +1,7 @@
 // Placeholder data for the game view until games and the opening explorer are wired to the
 // backend.
 
-import type { Square } from "../chess/board";
-
-export type Nag = "!!" | "!" | "!?" | "?!" | "?";
-
-export const NAGS: readonly Nag[] = ["!!", "!", "!?", "?!", "?"];
-
-export type GameMove = {
-  san: string;
-  from: Square;
-  to: Square;
-  /** Position after the move. */
-  fen: string;
-  nag?: Nag;
-};
-
-export type Variation = {
-  /** Ply index (1-based) of the mainline move this variation replaces. */
-  ply: number;
-  moves: { san: string; nag?: Nag }[];
-  comment?: string;
-};
+import type { PgnGame } from "../chess/pgn";
 
 export type ExplorerRow = {
   move: string;
@@ -31,89 +11,99 @@ export type ExplorerRow = {
   black: number;
 };
 
-export type Player = { name: string; rating: number; accuracy: number };
+/** Accuracy per side in percent, until the engine computes it. */
+export type Accuracy = { white: number; black: number };
 
-export type Game = {
-  white: Player;
-  black: Player;
-  eco: string;
-  opening: string;
-  moves: GameMove[];
-  variations: Variation[];
-};
-
-export const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
-export const game: Game = {
-  white: { name: "Whiskers", rating: 1340, accuracy: 94 },
-  black: { name: "Mochi", rating: 1200, accuracy: 89 },
-  eco: "C53",
-  opening: "Italian Game: Classical",
+/** The sample game, in the shape the Rust PGN reader produces. Evaluations come from the engine. */
+export const sampleGame: PgnGame = {
+  headers: [
+    ["Event", "Casual game"],
+    ["White", "Whiskers"],
+    ["Black", "Mochi"],
+    ["WhiteElo", "1340"],
+    ["BlackElo", "1200"],
+    ["ECO", "C53"],
+    ["Opening", "Italian Game: Classical"],
+    ["Result", "*"],
+  ],
+  startFen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
   moves: [
     {
       san: "e4",
-      from: "e2",
-      to: "e4",
+      uci: "e2e4",
       fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
     },
     {
       san: "e5",
-      from: "e7",
-      to: "e5",
+      uci: "e7e5",
       fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
     },
     {
       san: "Nf3",
-      from: "g1",
-      to: "f3",
+      uci: "g1f3",
       fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
     },
     {
       san: "Nc6",
-      from: "b8",
-      to: "c6",
+      uci: "b8c6",
       fen: "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
     },
     {
       san: "Bc4",
-      from: "f1",
-      to: "c4",
+      uci: "f1c4",
       fen: "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
     },
     {
       san: "Bc5",
-      from: "f8",
-      to: "c5",
+      uci: "f8c5",
       fen: "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
-      nag: "!",
+      nags: [1],
+      variations: [
+        [
+          {
+            san: "Nf6",
+            uci: "g8f6",
+            fen: "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+          },
+          {
+            san: "Ng5",
+            uci: "f3g5",
+            fen: "r1bqkb1r/pppp1ppp/2n2n2/4p1N1/2B1P3/8/PPPP1PPP/RNBQK2R b KQkq - 5 4",
+          },
+          {
+            san: "d5",
+            uci: "d7d5",
+            fen: "r1bqkb1r/ppp2ppp/2n2n2/3pp1N1/2B1P3/8/PPPP1PPP/RNBQK2R w KQkq - 0 5",
+          },
+          {
+            san: "exd5",
+            uci: "e4d5",
+            fen: "r1bqkb1r/ppp2ppp/2n2n2/3Pp1N1/2B5/8/PPPP1PPP/RNBQK2R b KQkq - 0 5",
+          },
+          {
+            san: "Na5",
+            uci: "c6a5",
+            fen: "r1bqkb1r/ppp2ppp/5n2/n2Pp1N1/2B5/8/PPPP1PPP/RNBQK2R w KQkq - 1 6",
+            nags: [6],
+            comment: "The Two Knights is sharper, but Mochi prefers a calm nap.",
+          },
+        ],
+      ],
     },
     {
       san: "c3",
-      from: "c2",
-      to: "c3",
+      uci: "c2c3",
       fen: "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R b KQkq - 0 4",
     },
     {
       san: "Nf6",
-      from: "g8",
-      to: "f6",
+      uci: "g8f6",
       fen: "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5",
     },
   ],
-  variations: [
-    {
-      ply: 6,
-      moves: [
-        { san: "Nf6" },
-        { san: "Ng5" },
-        { san: "d5" },
-        { san: "exd5" },
-        { san: "Na5", nag: "?!" },
-      ],
-      comment: "The Two Knights is sharper, but Mochi prefers a calm nap.",
-    },
-  ],
 };
+
+export const sampleAccuracy: Accuracy = { white: 94, black: 89 };
 
 /** The position the placeholder explorer data belongs to (the end of the sample game). */
 export const EXPLORER_FEN =

@@ -1,50 +1,69 @@
-import { batch, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
-import type { Color } from "./chess/board";
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { type Color, START_FEN } from "./chess/board";
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
-import { type MoveInput, makeMove } from "./chess/rules";
+import type { PgnGame } from "./chess/pgn";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
+import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
-import { type GameMove, game, type Nag, START_FEN } from "./data/mockGame";
+import { sampleAccuracy, sampleGame } from "./data/mockGame";
+import { createGameSession, type GameSession, gameTitle } from "./game/session";
 
-const GAME_TAB_ID = "game";
 /** Number of engine lines shown in the analysis panel. */
 const ENGINE_LINES = 3;
 
+/** A workspace tab. Tabs without a session are placeholders for features still to come. */
+type Tab = WorkspaceTab & { session?: GameSession };
+
 export default function App() {
-  const [tabs, setTabs] = createSignal<WorkspaceTab[]>([
-    { id: GAME_TAB_ID, title: `${game.white.name} vs ${game.black.name}`, live: true },
+  const [tabs, setTabs] = createSignal<Tab[]>([
+    {
+      id: "sample",
+      title: gameTitle(sampleGame),
+      live: true,
+      session: createGameSession(sampleGame, { accuracy: sampleAccuracy }),
+    },
     { id: "prep", title: "Opening prep · Italian" },
     { id: "puzzle", title: "Purrzle #2451" },
   ]);
-  const [activeTab, setActiveTab] = createSignal<string | undefined>(GAME_TAB_ID);
-  let untitled = 0;
+  const [activeId, setActiveId] = createSignal<string | undefined>("sample");
+  const activeTab = () => tabs().find((tab) => tab.id === activeId());
+  const [importing, setImporting] = createSignal(false);
+  const [exporting, setExporting] = createSignal(false);
+  let opened = 0;
 
   const closeTab = (id: string) => {
+    const index = tabs().findIndex((tab) => tab.id === id);
+    const closing = tabs()[index];
     const remaining = tabs().filter((tab) => tab.id !== id);
-    if (activeTab() === id) {
-      const index = tabs().findIndex((tab) => tab.id === id);
-      setActiveTab(remaining[Math.min(index, remaining.length - 1)]?.id);
-    }
+    if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
+    closing?.session?.dispose();
   };
 
-  const newTab = () => {
-    untitled += 1;
-    const tab = { id: `new-${untitled}`, title: "New board" };
-    setTabs([...tabs(), tab]);
-    setActiveTab(tab.id);
+  const openGames = (games: PgnGame[], title?: string) => {
+    const created = games.map((game) => {
+      opened += 1;
+      return {
+        id: `game-${opened}`,
+        title: title ?? gameTitle(game),
+        session: createGameSession(game),
+      };
+    });
+    setTabs([...tabs(), ...created]);
+    setActiveId(created[0]?.id);
   };
+
+  const newTab = () => openGames([{ headers: [], startFen: START_FEN, moves: [] }], "New board");
 
   return (
     <div class="flex h-full flex-col">
       <TitleBar
         tabs={tabs()}
-        activeId={activeTab()}
-        onSelect={setActiveTab}
+        activeId={activeId()}
+        onSelect={setActiveId}
         onClose={closeTab}
         onNew={newTab}
       />
@@ -52,93 +71,82 @@ export default function App() {
         <SideRail />
         <main class="min-w-0 flex-1">
           <Show
-            when={activeTab() === GAME_TAB_ID}
+            when={activeTab()?.session}
+            keyed
             fallback={
               <div class="grid h-full place-items-center p-8">
                 <EmptyState class="w-full max-w-md">
-                  <For each={tabs().filter((tab) => tab.id === activeTab())}>
-                    {(tab) => <span class="font-bold text-ink">{tab.title}</span>}
-                  </For>
+                  <span class="font-bold text-ink">{activeTab()?.title ?? "No tabs open"}</span>
                   <span>Nothing here yet. This board is still curled up asleep.</span>
                 </EmptyState>
               </div>
             }
           >
-            <GameWorkspace />
+            {(session) => (
+              <GameWorkspace
+                session={session}
+                onImport={() => setImporting(true)}
+                onExport={() => setExporting(true)}
+              />
+            )}
           </Show>
         </main>
       </div>
+      <ImportDialog
+        open={importing()}
+        onClose={() => setImporting(false)}
+        onOpen={(games) => openGames(games)}
+      />
+      <ExportDialog
+        open={exporting()}
+        session={activeTab()?.session}
+        onClose={() => setExporting(false)}
+      />
     </div>
   );
 }
 
-function GameWorkspace() {
-  const [moves, setMoves] = createStore(structuredClone(game.moves));
-  const maxPly = () => moves.length;
-  const [ply, setPly] = createSignal(maxPly());
+function GameWorkspace(props: {
+  session: GameSession;
+  onImport: () => void;
+  onExport: () => void;
+}) {
+  const session = props.session;
   const [orientation, setOrientation] = createSignal<Color>("w");
-
-  const goTo = (target: number) => setPly(Math.max(0, Math.min(maxPly(), target)));
-  /** Position after `at` plies of `list`, or `undefined` when the line is shorter than that. */
-  const fenAt = (list: readonly GameMove[], at: number) =>
-    at === 0 ? START_FEN : list[at - 1]?.fen;
-  const fen = () => fenAt(moves, ply()) ?? START_FEN;
-  const lastMove = () => (ply() === 0 ? undefined : moves[ply() - 1]);
+  const fen = () => session.node().fen;
 
   const [engineOn, setEngineOn] = createSignal(true);
   const engine = createEngineAnalysis({ fen, enabled: engineOn, multipv: ENGINE_LINES });
   const analysis = () => engine.analysisOf(fen());
-  // Plies the engine hasn't looked at yet stay empty in the eval graph.
-  const evals = () =>
-    [START_FEN, ...moves.map((move) => move.fen)].map((at) => positionScore(engine.analysisOf(at)));
+  /** The engine's evaluation of a node, or else the one the game was imported with. */
+  const scoreOf = (id: string) => {
+    const node = session.tree.nodes[id];
+    return positionScore(engine.analysisOf(node.fen)) ?? node.eval;
+  };
+  // Positions without either stay empty in the eval graph.
+  const evals = createMemo(() => session.line().map(scoreOf));
   const arrows = createMemo(() => {
     const current = analysis();
     return engineOn() && current ? lineArrows(current) : [];
   });
-  const liveGame = createMemo(() => ({
-    ...game,
-    variations: game.variations.filter(
-      (v) => v.ply <= moves.length && fenAt(moves, v.ply - 1) === fenAt(game.moves, v.ply - 1),
-    ),
-  }));
-
-  /** Follows the game when the move matches it; otherwise the new move replaces the rest of it. */
-  const playMove = (input: MoveInput) => {
-    const current = ply();
-    const result = makeMove(fen(), input);
-    if (!result) return;
-    if (moves[current]?.fen === result.fen) {
-      setPly(current + 1);
-      return;
-    }
-    const move: GameMove = {
-      san: result.san,
-      from: input.from,
-      to: input.to,
-      fen: result.fen,
-    };
-    batch(() => {
-      setMoves(reconcile([...moves.slice(0, current), move]));
-      setPly(current + 1);
-    });
-  };
-
-  const toggleNag = (nag: Nag) => {
-    if (ply() === 0) return;
-    setMoves(ply() - 1, "nag", (current) => (current === nag ? undefined : nag));
-  };
 
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target.closest("input, textarea, [contenteditable]") || event.metaKey || event.ctrlKey) {
+      if (
+        target.closest("input, textarea, [contenteditable], dialog, [role=menu]") ||
+        event.metaKey ||
+        event.ctrlKey
+      ) {
         return;
       }
       const step: Record<string, () => void> = {
-        ArrowLeft: () => goTo(ply() - 1),
-        ArrowRight: () => goTo(ply() + 1),
-        Home: () => goTo(0),
-        End: () => goTo(maxPly()),
+        ArrowLeft: session.prev,
+        ArrowRight: session.next,
+        ArrowUp: () => session.goToSibling(-1),
+        ArrowDown: () => session.goToSibling(1),
+        Home: session.first,
+        End: session.last,
       };
       const action = step[event.key];
       if (action) {
@@ -153,29 +161,27 @@ function GameWorkspace() {
   return (
     <div class="grid h-full grid-cols-[minmax(0,1fr)_minmax(0,1.02fr)] gap-3.5">
       <BoardPanel
-        game={liveGame()}
-        ply={ply()}
-        maxPly={maxPly()}
+        info={session.info()}
+        ply={session.index()}
+        maxPly={session.line().length - 1}
         fen={fen()}
         evals={evals()}
-        lastMove={lastMove()}
+        lastMove={session.node().move}
         arrows={arrows()}
         orientation={orientation()}
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
-        onPly={goTo}
-        onMove={playMove}
+        onPly={session.goToIndex}
+        onMove={session.play}
+        onImport={props.onImport}
+        onExport={props.onExport}
       />
       <AnalysisPanel
-        game={liveGame()}
-        moves={moves}
-        ply={ply()}
-        fen={fen()}
+        session={session}
         analysis={analysis()}
+        score={scoreOf(session.currentId())}
         engineOn={engineOn()}
         engineError={engine.error()}
         onToggleEngine={() => setEngineOn((on) => !on)}
-        onPly={goTo}
-        onToggleNag={toggleNag}
       />
     </div>
   );
