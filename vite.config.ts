@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import process from "node:process";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
@@ -29,5 +30,10 @@ export default defineConfig(() => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+  },
+
+  // Unit tests cover pure logic, so skip the jsdom environment vite-plugin-solid would pick.
+  test: {
+    environment: "node",
   },
 }));

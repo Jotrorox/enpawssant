@@ -39,6 +39,6 @@ description = "Format Rust and TypeScript"
 run = ["cargo fmt", "pnpm biome format --write ."]
 
 [tasks.test]
-description = "Run the Rust test suite"
-depends = ["fetch-engine"]
-run = "cargo test --workspace"
+description = "Run the Rust and TypeScript test suites"
+depends = ["install", "fetch-engine"]
+run = ["cargo test --workspace", "pnpm test"]
