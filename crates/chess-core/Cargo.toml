@@ -1,0 +1,9 @@
+[package]
+name = "chess-core"
+description = "Chess logic for EnPawssant, independent of Tauri"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+shakmaty = "0.30.2"

@@ -1,0 +1,13 @@
+# Dependencies & build output
+node_modules
+dist
+/target/
+*.tsbuildinfo
+
+# Stockfish sidecar, downloaded by `mise run fetch-engine`
+src-tauri/binaries/
+
+# Editors & OS
+.DS_Store
+.idea
+*.local

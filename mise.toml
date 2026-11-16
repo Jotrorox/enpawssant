@@ -1,0 +1,44 @@
+# Rust is managed by rustup via rust-toolchain.toml, not by mise.
+[tools]
+node = "26"
+pnpm = "12"
+
+[tasks.install]
+description = "Install JS dependencies"
+run = "pnpm install --frozen-lockfile"
+sources = ["package.json", "pnpm-lock.yaml"]
+outputs = ["node_modules/.pnpm/lock.yaml"]
+
+[tasks.fetch-engine]
+description = "Download the Stockfish sidecar for this host (pass --force to update)"
+run = "node scripts/fetch-stockfish.mjs"
+
+[tasks.dev]
+description = "Run the app in development mode"
+depends = ["install", "fetch-engine"]
+run = "pnpm tauri dev"
+
+[tasks.build]
+description = "Build a release bundle"
+depends = ["install", "fetch-engine"]
+run = "pnpm tauri build"
+
+[tasks.check]
+description = "Lint and type-check Rust and TypeScript"
+# tauri-build fails if the externalBin sidecar is missing, so fetch it first.
+depends = ["install", "fetch-engine"]
+run = [
+  "cargo clippy --workspace -- -D warnings",
+  "cargo fmt --check",
+  "pnpm tsc --noEmit",
+  "pnpm biome check .",
+]
+
+[tasks.fmt]
+description = "Format Rust and TypeScript"
+run = ["cargo fmt", "pnpm biome format --write ."]
+
+[tasks.test]
+description = "Run the Rust test suite"
+depends = ["fetch-engine"]
+run = "cargo test --workspace"

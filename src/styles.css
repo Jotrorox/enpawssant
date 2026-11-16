@@ -1,0 +1,76 @@
+:root {
+  --color-bg: #fff6f8;
+  --color-text: #3b2a3a;
+  --color-error: #b3261e;
+  --font-display: "Fredoka", system-ui, sans-serif;
+  --font-body: "Nunito", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --titlebar-height: 28px;
+
+  color-scheme: light;
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background-color: var(--color-bg);
+}
+
+body {
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.titlebar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--titlebar-height);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  height: 100%;
+  padding: var(--titlebar-height) 2rem 2rem;
+}
+
+.wordmark {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 3.5rem;
+  letter-spacing: 0.01em;
+}
+
+.engine {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.engine code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.engine-error {
+  color: var(--color-error);
+  user-select: text;
+  -webkit-user-select: text;
+}

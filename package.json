@@ -1,0 +1,29 @@
+{
+  "name": "enpawssant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A cat-themed chess analysis app",
+  "type": "module",
+  "scripts": {
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/fredoka": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/nunito": "^5.3.0",
+    "@tauri-apps/api": "^2",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.6.6",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}
