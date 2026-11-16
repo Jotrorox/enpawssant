@@ -59,3 +59,7 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 
 The engine is only ever spawned from Rust; the frontend has no shell permissions and talks to the
 backend through Tauri commands such as `engine_info`.
+
+## License
+
+BSD 3-Clause, see [LICENSE](LICENSE). Stockfish is downloaded separately and is licensed under the GPLv3.
