@@ -103,8 +103,6 @@ export const sampleGame: PgnGame = {
   ],
 };
 
-export const sampleAccuracy: Accuracy = { white: 94, black: 89 };
-
 /** The position the placeholder explorer data belongs to (the end of the sample game). */
 export const EXPLORER_FEN =
   "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5";

@@ -7,10 +7,12 @@ import {
   deleteNode,
   emptyTree,
   type GameTree,
+  indexPath,
   isMainline,
   lineEnd,
   makeMainline,
   type NodeId,
+  nodeAtIndexPath,
   pathTo,
   treeFromPgn,
   treeToPgn,
@@ -89,6 +91,23 @@ describe("move tree", () => {
     const tree = treeFromPgn(sampleGame);
     const pgn = treeToPgn(tree, sampleGame.headers);
     expect(treeToPgn(treeFromPgn(pgn), sampleGame.headers)).toEqual(pgn);
+  });
+
+  test("finds a node again by its index path after a round trip", () => {
+    const tree = treeFromPgn(sampleGame);
+    const afterBc5 = mainline(tree)[6];
+    const nf6 = play(tree, play(tree, afterBc5, { from: "d2", to: "d4" }), {
+      from: "g8",
+      to: "f6",
+    });
+
+    const path = indexPath(tree, nf6);
+    expect(path).toEqual([0, 0, 0, 0, 0, 0, 1, 0]);
+    const restored = treeFromPgn(treeToPgn(tree, []));
+    expect(restored.nodes[nodeAtIndexPath(restored, path)].fen).toBe(tree.nodes[nf6].fen);
+    expect(nodeAtIndexPath(restored, [])).toBe(restored.rootId);
+    // A path that runs past the tree stops at the last node it reaches.
+    expect(nodeAtIndexPath(restored, [0, 5, 0])).toBe(mainline(restored)[1]);
   });
 
   test("numbers plies from the starting FEN", () => {
