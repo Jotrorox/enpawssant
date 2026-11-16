@@ -15,16 +15,18 @@ async fn engine_info(app: AppHandle, engine: State<'_, Engine>) -> Result<Engine
 }
 
 /// Analyses `fen` with `multipv` lines until another position is requested or
-/// `engine_stop` is called. Updates arrive on `on_event`.
+/// `engine_stop` is called, or only to `depth` when given. Updates arrive on
+/// `on_event`, which ends with a `done` event.
 #[tauri::command]
 async fn engine_analyze(
     app: AppHandle,
     engine: State<'_, Engine>,
     fen: String,
     multipv: u32,
+    depth: Option<u32>,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
-    engine.analyze(&app, fen, multipv, on_event).await
+    engine.analyze(&app, fen, multipv, depth, on_event).await
 }
 
 /// Stops the current analysis.

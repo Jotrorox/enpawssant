@@ -1,9 +1,6 @@
-// A sample game for tests, and the shape of accuracy figures until the engine computes them.
+// A sample game for tests.
 
 import type { PgnGame } from "../chess/pgn";
-
-/** Accuracy per side in percent, until the engine computes it. */
-export type Accuracy = { white: number; black: number };
 
 /** The sample game, in the shape the Rust PGN reader produces. Evaluations come from the engine. */
 export const sampleGame: PgnGame = {

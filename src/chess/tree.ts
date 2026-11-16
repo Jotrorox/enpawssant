@@ -23,7 +23,7 @@ export type MoveNode = {
   nags: number[];
   startingComment?: string;
   comment?: string;
-  /** The evaluation the game was imported with, e.g. from a lichess `[%eval]`. */
+  /** The stored evaluation: imported from a `[%eval]`, or written by a game review. */
   eval?: PgnMove["eval"];
 };
 

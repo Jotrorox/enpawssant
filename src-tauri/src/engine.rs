@@ -7,6 +7,10 @@
 //! actor streams throttled snapshots of that search to it with every line in
 //! SAN and every score from White's point of view.
 //!
+//! A search runs until it is replaced or stopped, or to a fixed depth when the
+//! request asks for one (full-game analysis does). Either way its channel ends
+//! with a `done` event that says whether the search ran its course.
+//!
 //! Switching positions has to wait for the engine: after `stop`, Stockfish still
 //! prints `info` lines for the old search until its `bestmove`. The actor drops
 //! those lines and only then starts the next search. Requests that arrive in
@@ -37,6 +41,7 @@ const QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 const HASH_MB: u32 = 256;
 const MAX_MULTIPV: u32 = 5;
+const MAX_DEPTH: u32 = 99;
 
 /// What the frontend shows about the running engine.
 #[derive(Clone, Debug, Serialize)]
@@ -52,6 +57,11 @@ pub struct EngineInfo {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum EngineEvent {
     Update(AnalysisUpdate),
+    /// The search is over. `complete` is false when it was replaced or stopped
+    /// before reaching its depth; searches without a depth never complete.
+    Done {
+        complete: bool,
+    },
     /// The engine failed. The search is over; the next request restarts it.
     Error {
         message: String,
@@ -127,7 +137,16 @@ struct Request {
     fen: String,
     root: AnalysisRoot,
     multipv: u32,
+    /// Search to this depth instead of until told otherwise.
+    depth: Option<u32>,
     channel: Channel<EngineEvent>,
+}
+
+impl Request {
+    fn send_done(&self, complete: bool) {
+        // A closed channel means the frontend moved on.
+        let _ = self.channel.send(EngineEvent::Done { complete });
+    }
 }
 
 impl Engine {
@@ -137,12 +156,14 @@ impl Engine {
         Ok(ensure_session(&mut session, app).await?.info.clone())
     }
 
-    /// Searches `fen` until told otherwise, replacing the current search.
+    /// Searches `fen` to `depth`, or until told otherwise without one,
+    /// replacing the current search.
     pub async fn analyze<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         fen: String,
         multipv: u32,
+        depth: Option<u32>,
         channel: Channel<EngineEvent>,
     ) -> Result<(), String> {
         let root = AnalysisRoot::from_fen(&fen).map_err(|e| e.to_string())?;
@@ -150,6 +171,7 @@ impl Engine {
             fen,
             root,
             multipv: multipv.clamp(1, MAX_MULTIPV),
+            depth: depth.map(|d| d.clamp(1, MAX_DEPTH)),
             channel,
         });
         let mut session = self.session.lock().await;
@@ -373,6 +395,14 @@ impl Search {
         self.dirty = true;
     }
 
+    /// Sends the final snapshot of a search that ran its course.
+    fn finish(mut self) {
+        // The engine is done printing, so the last burst is as complete as it gets.
+        self.rest_of_burst = false;
+        self.flush();
+        self.request.send_done(true);
+    }
+
     /// Sends a snapshot if anything changed since the last one.
     fn flush(&mut self) {
         if self.rest_of_burst || !mem::take(&mut self.dirty) {
@@ -468,14 +498,18 @@ impl<I: EngineInput> Actor<I> {
                 }
                 match mem::replace(&mut self.state, State::Idle) {
                     State::Idle => self.start(request)?,
-                    State::Searching(_) => {
+                    State::Searching(search) => {
+                        search.request.send_done(false);
                         self.send("stop")?;
                         self.state = State::Stopping {
                             since: Instant::now(),
                             next: Some(request),
                         };
                     }
-                    State::Stopping { since, .. } => {
+                    State::Stopping { since, next } => {
+                        if let Some(replaced) = next {
+                            replaced.send_done(false);
+                        }
                         self.state = State::Stopping {
                             since,
                             next: Some(request),
@@ -492,14 +526,20 @@ impl<I: EngineInput> Actor<I> {
     fn stop_search(&mut self) -> Result<(), String> {
         self.state = match mem::replace(&mut self.state, State::Idle) {
             State::Idle => State::Idle,
-            State::Searching(_) => {
+            State::Searching(search) => {
+                search.request.send_done(false);
                 self.send("stop")?;
                 State::Stopping {
                     since: Instant::now(),
                     next: None,
                 }
             }
-            State::Stopping { since, .. } => State::Stopping { since, next: None },
+            State::Stopping { since, next } => {
+                if let Some(dropped) = next {
+                    dropped.send_done(false);
+                }
+                State::Stopping { since, next: None }
+            }
         };
         Ok(())
     }
@@ -511,7 +551,10 @@ impl<I: EngineInput> Actor<I> {
             self.multipv = request.multipv;
         }
         self.send(&format!("position fen {}", request.root.fen()))?;
-        self.send("go infinite")?;
+        match request.depth {
+            Some(depth) => self.send(&format!("go depth {depth}"))?,
+            None => self.send("go infinite")?,
+        }
         self.state = State::Searching(Search::new(request));
         Ok(())
     }
@@ -523,8 +566,8 @@ impl<I: EngineInput> Actor<I> {
                     next: Some(request),
                     ..
                 } => self.start(request)?,
-                // The search ended on its own (it shouldn't with `go infinite`).
-                State::Searching(mut search) => search.flush(),
+                // The search reached its depth.
+                State::Searching(search) => search.finish(),
                 State::Stopping { next: None, .. } | State::Idle => {}
             }
         } else if let State::Searching(search) = &mut self.state
@@ -590,6 +633,7 @@ fn send_final(request: &Request, outcome: KnownOutcome) {
         outcome: Some(outcome.as_str()),
     };
     let _ = request.channel.send(EngineEvent::Update(update));
+    request.send_done(true);
 }
 
 #[cfg(test)]
@@ -636,6 +680,19 @@ mod tests {
         }
 
         fn analyze(&self, fen: &str, multipv: u32) -> mpsc::UnboundedReceiver<Value> {
+            self.request(fen, multipv, None)
+        }
+
+        fn analyze_to_depth(&self, fen: &str, depth: u32) -> mpsc::UnboundedReceiver<Value> {
+            self.request(fen, 1, Some(depth))
+        }
+
+        fn request(
+            &self,
+            fen: &str,
+            multipv: u32,
+            depth: Option<u32>,
+        ) -> mpsc::UnboundedReceiver<Value> {
             let (sender, events) = mpsc::unbounded_channel();
             let channel = Channel::new(move |body| {
                 if let InvokeResponseBody::Json(json) = body {
@@ -647,6 +704,7 @@ mod tests {
                 fen: fen.to_owned(),
                 root: AnalysisRoot::from_fen(fen).unwrap(),
                 multipv,
+                depth,
                 channel,
             };
             assert!(self.commands.send(Command::Analyze(request)).is_ok());
@@ -786,8 +844,47 @@ mod tests {
             assert_eq!(update["lines"][0]["score"], json!({ "mate": -3 }));
             assert_eq!(update["lines"][0]["san"], json!(["e5"]));
 
-            assert!(drain(&mut first).iter().all(|e| e["depth"] != 9));
-            assert!(drain(&mut skipped).is_empty());
+            let first = drain(&mut first);
+            assert!(first.iter().all(|e| e["depth"] != 9));
+            assert_eq!(
+                first.last(),
+                Some(&json!({ "type": "done", "complete": false }))
+            );
+            // Replaced before it started: it only hears that it is over.
+            assert_eq!(
+                drain(&mut skipped),
+                vec![json!({ "type": "done", "complete": false })]
+            );
+        });
+    }
+
+    #[test]
+    fn depth_limited_searches_report_when_they_are_done() {
+        async_runtime::block_on(async {
+            let mut h = Harness::start();
+            let mut events = h.analyze_to_depth(ITALIAN, 12);
+            h.expect_written(&[
+                &format!("position fen {}", normalized(ITALIAN)),
+                "go depth 12",
+            ])
+            .await;
+            h.say("info depth 11 score cp 30 pv d2d4").await;
+            h.say("info depth 12 score cp 41 pv d2d4 e5d4").await;
+            h.say("bestmove d2d4 ponder e5d4").await;
+            // The final line arrives even if the throttle has not fired yet.
+            let update = next_event(&mut events, |e| e["depth"] == 12).await;
+            assert_eq!(update["lines"][0]["score"], json!({ "cp": 41 }));
+            let done = next_event(&mut events, |e| e["type"] == "done").await;
+            assert_eq!(done["complete"], true);
+
+            // The engine is idle again, so the next search starts right away.
+            let mut events = h.analyze_to_depth(START, 12);
+            h.expect_written(&[&format!("position fen {START}"), "go depth 12"])
+                .await;
+            h.commands.send(Command::Stop).ok();
+            h.expect_written(&["stop"]).await;
+            let done = next_event(&mut events, |e| e["type"] == "done").await;
+            assert_eq!(done["complete"], false);
         });
     }
 
@@ -803,6 +900,8 @@ mod tests {
             let update = next_event(&mut events, |_| true).await;
             assert_eq!(update["outcome"], "0-1");
             assert_eq!(update["lines"], json!([]));
+            let done = next_event(&mut events, |_| true).await;
+            assert_eq!(done["complete"], true);
             // The running search is stopped and nothing new starts after it.
             h.expect_written(&["stop"]).await;
             h.say("bestmove e2e4").await;
@@ -903,6 +1002,13 @@ mod tests {
             assert_eq!(update["fen"], AFTER_E4);
             let first_move = &update["lines"][0]["uci"][0];
             assert!(first_move.as_str().unwrap().chars().nth(1) == Some('7'));
+
+            // A depth-limited search runs to its depth and says so.
+            let mut events = h.analyze_to_depth(ITALIAN, 10);
+            let done = next_event_within(patience, &mut events, |e| e["type"] == "done").await;
+            assert_eq!(done["complete"], true);
+            let updates = drain(&mut events);
+            assert!(updates.is_empty(), "nothing follows `done`: {updates:?}");
 
             let (done, exited) = oneshot::channel();
             assert!(h.commands.send(Command::Quit(done)).is_ok());
