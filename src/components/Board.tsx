@@ -9,6 +9,7 @@ import {
   Show,
 } from "solid-js";
 import {
+  type Arrow,
   type Color,
   cellToSquare,
   displaySquares,
@@ -29,7 +30,6 @@ import {
   squareIndex,
 } from "../chess/rules";
 import { playSound, primeAudio, type SoundKind } from "../chess/sound";
-import type { Arrow } from "../data/mockGame";
 import {
   burst,
   CAPTURE_COLORS,

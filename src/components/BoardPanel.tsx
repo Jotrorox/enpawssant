@@ -1,8 +1,9 @@
-import { createSignal, Show } from "solid-js";
-import { type Color, formatEval, whiteShare } from "../chess/board";
+import { createSignal, For, Show } from "solid-js";
+import type { Arrow, Color } from "../chess/board";
 import type { MoveInput } from "../chess/rules";
+import { barLabel, formatScore, plotPawns, type Score, whiteShare } from "../chess/score";
 import { setSoundEnabled, soundEnabled } from "../chess/sound";
-import type { Arrow, Game, GameMove } from "../data/mockGame";
+import type { Game, GameMove } from "../data/mockGame";
 import { Board } from "./Board";
 import {
   ChartIcon,
@@ -24,7 +25,8 @@ type BoardPanelProps = {
   ply: number;
   maxPly: number;
   fen: string;
-  evals: number[];
+  /** White-relative evaluation per ply, where the engine has one. */
+  evals: (Score | undefined)[];
   lastMove?: GameMove;
   arrows?: Arrow[];
   orientation: Color;
@@ -40,7 +42,7 @@ export function BoardPanel(props: BoardPanelProps) {
 
       <div class="flex min-h-0 flex-1 flex-col justify-center [container-type:size]">
         <div class="board-fit mx-auto flex gap-[18px]">
-          <EvalBar pawns={props.evals[props.ply]} orientation={props.orientation} />
+          <EvalBar score={props.evals[props.ply]} orientation={props.orientation} />
           <div class="min-w-0 flex-1">
             <Board
               fen={props.fen}
@@ -93,14 +95,14 @@ function GameHeader(props: { game: Game }) {
   );
 }
 
-function EvalBar(props: { pawns: number; orientation: Color }) {
-  const share = () => whiteShare(props.pawns);
+function EvalBar(props: { score?: Score; orientation: Color }) {
+  const share = () => (props.score ? whiteShare(props.score) : 0.5);
   const blackOnTop = () => props.orientation === "w";
 
   return (
     <div
       role="img"
-      aria-label={`Evaluation ${formatEval(props.pawns)}`}
+      aria-label={props.score ? `Evaluation ${formatScore(props.score)}` : "No evaluation yet"}
       class={`relative mt-[30px] flex w-[22px] shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-blush-200 ${
         blackOnTop() ? "flex-col" : "flex-col-reverse"
       }`}
@@ -112,10 +114,10 @@ function EvalBar(props: { pawns: number; orientation: Color }) {
       <span
         aria-hidden="true"
         class={`w-full text-center font-mono text-[8.5px] leading-[1.8] tracking-tighter ${
-          props.pawns >= 0 ? "text-ink" : "text-ink/60"
+          share() >= 0.5 ? "text-ink" : "text-ink/60"
         }`}
       >
-        {Math.abs(props.pawns).toFixed(2).replace(/^0/, "")}
+        {props.score ? barLabel(props.score) : "…"}
       </span>
     </div>
   );
@@ -212,7 +214,7 @@ function BoardToolbar(props: {
 
 function EvalGraph(props: {
   game: Game;
-  evals: number[];
+  evals: (Score | undefined)[];
   ply: number;
   maxPly: number;
   onPly: (ply: number) => void;
@@ -220,8 +222,24 @@ function EvalGraph(props: {
   const HEIGHT = 40;
   const MID = HEIGHT / 2;
   const x = (ply: number) => (props.maxPly === 0 ? 0 : (ply / props.maxPly) * 100);
-  const y = (pawns: number) => MID - (MID - 3) * Math.tanh(pawns / 1.2);
-  const points = () => props.evals.map((pawns, ply) => `${x(ply)},${y(pawns)}`).join(" ");
+  const y = (score: Score) => MID - (MID - 3) * Math.tanh(plotPawns(score) / 1.2);
+  /** Runs of consecutive analysed plies; unanalysed plies leave gaps. */
+  const runs = () => {
+    const result: { first: number; last: number; points: string[] }[] = [];
+    props.evals.forEach((score, ply) => {
+      if (!score) return;
+      const run = result[result.length - 1];
+      const point = `${x(ply)},${y(score)}`;
+      if (run && run.last === ply - 1) {
+        run.last = ply;
+        run.points.push(point);
+      } else {
+        result.push({ first: ply, last: ply, points: [point] });
+      }
+    });
+    return result.map((run) => ({ ...run, points: run.points.join(" ") }));
+  };
+  const current = () => props.evals[props.ply];
 
   const selectAt = (event: MouseEvent) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -255,7 +273,14 @@ function EvalGraph(props: {
           role="img"
           aria-label="Evaluation over the game"
         >
-          <polygon points={`0,0 ${points()} 100,0`} fill="var(--color-plum)" />
+          <For each={runs()}>
+            {(run) => (
+              <polygon
+                points={`${x(run.first)},0 ${run.points} ${x(run.last)},0`}
+                fill="var(--color-plum)"
+              />
+            )}
+          </For>
           <line
             x1="0"
             x2="100"
@@ -267,14 +292,18 @@ function EvalGraph(props: {
             vector-effect="non-scaling-stroke"
             opacity="0.7"
           />
-          <polyline
-            points={points()}
-            fill="none"
-            stroke="var(--color-rose)"
-            stroke-width="2"
-            stroke-linejoin="round"
-            vector-effect="non-scaling-stroke"
-          />
+          <For each={runs()}>
+            {(run) => (
+              <polyline
+                points={run.points}
+                fill="none"
+                stroke="var(--color-rose)"
+                stroke-width="2"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            )}
+          </For>
           <line
             x1={x(props.ply)}
             x2={x(props.ply)}
@@ -285,13 +314,17 @@ function EvalGraph(props: {
             vector-effect="non-scaling-stroke"
           />
         </svg>
-        <span
-          class="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose"
-          style={{
-            left: `${x(props.ply)}%`,
-            top: `${(y(props.evals[props.ply]) / HEIGHT) * 100}%`,
-          }}
-        />
+        <Show when={current()}>
+          {(score) => (
+            <span
+              class="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose"
+              style={{
+                left: `${x(props.ply)}%`,
+                top: `${(y(score()) / HEIGHT) * 100}%`,
+              }}
+            />
+          )}
+        </Show>
       </div>
     </Card>
   );

@@ -2,8 +2,8 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the game view UI is in place and the board is fully playable, but the game,
-> analysis and explorer are placeholder data; only the engine name comes from the bundled Stockfish.
+> Early foundation: the board is fully playable and the bundled Stockfish analyses every position
+> live, but the sample game and the opening explorer are still placeholder data.
 
 ## The board
 
@@ -17,6 +17,18 @@ en passant, promotion, check and SAN) lives in `src/chess/rules.ts`.
 - Sounds are synthesised with Web Audio (wooden knocks, a collar-bell "ting" for check, chimes for
   promotion and mate), timed to the moment a piece lands. Mute them from the board toolbar.
 - Animations respect the system's reduced-motion setting.
+
+## Live analysis
+
+Stockfish runs as one long-lived process for the whole session and analyses whatever position is on
+the board (`go infinite`, three lines with MultiPV). Rust parses its output, converts the lines to
+SAN with `chess-core` (shakmaty) and streams snapshots, at most ten per second and with scores from
+White's point of view, to the frontend over a Tauri channel. They drive the eval bar, the top lines,
+the arrows, depth and speed, and the eval graph for every ply analysed so far.
+
+Moving to another position stops the running search, waits for the engine to finish it and only
+then starts the new one, so stale lines never reach the board. Checkmate and stalemate are answered
+without asking the engine.
 
 ## Prerequisites
 
@@ -68,13 +80,13 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
-    │   ├── engine.rs       # Spawns Stockfish and talks UCI
+    │   ├── engine.rs       # Stockfish session: spawns it, runs searches, streams analysis
     │   └── lib.rs          # Tauri setup and commands
     └── tauri.conf.json
 ```
 
 The engine is only ever spawned from Rust; the frontend has no shell permissions and talks to the
-backend through Tauri commands such as `engine_info`.
+backend through the Tauri commands `engine_info`, `engine_analyze` and `engine_stop`.
 
 ## License
 

@@ -1,5 +1,6 @@
 import { createEffect, createMemo, For, Show } from "solid-js";
-import { formatEval, moveNumberPrefix } from "../chess/board";
+import { moveNumberPrefix } from "../chess/board";
+import { formatScore, type Score } from "../chess/score";
 import { type GameMove, NAGS, type Nag, type Variation } from "../data/mockGame";
 import { Card, CardTitle } from "./ui";
 
@@ -36,6 +37,8 @@ type NotationProps = {
   variations: Variation[];
   ply: number;
   fen: string;
+  /** Evaluation of the current position, if the engine has one. */
+  score?: Score;
   onPly: (ply: number) => void;
   onToggleNag: (nag: Nag) => void;
 };
@@ -97,6 +100,7 @@ export function Notation(props: NotationProps) {
                       ply={ply}
                       showBlackNumber={i() === 0 && index() > 0}
                       current={ply === props.ply}
+                      score={ply === props.ply ? props.score : undefined}
                       onSelect={() => props.onPly(ply)}
                     />
                   )}
@@ -122,6 +126,7 @@ function MainlineMove(props: {
   ply: number;
   showBlackNumber: boolean;
   current: boolean;
+  score?: Score;
   onSelect: () => void;
 }) {
   const prefix = () => moveNumberPrefix(props.ply - 1, props.showBlackNumber);
@@ -144,8 +149,10 @@ function MainlineMove(props: {
         {props.move.san}
         {props.move.nag}
       </button>
-      <Show when={props.current}>
-        <span class="ml-1.5 font-mono text-[12px] text-ink/75">{formatEval(props.move.eval)}</span>
+      <Show when={props.score}>
+        {(score) => (
+          <span class="ml-1.5 font-mono text-[12px] text-ink/75">{formatScore(score())}</span>
+        )}
       </Show>{" "}
     </>
   );

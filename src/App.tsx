@@ -1,22 +1,18 @@
 import { batch, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { Color } from "./chess/board";
+import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import { type MoveInput, makeMove } from "./chess/rules";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
-import {
-  analysisByPly,
-  type GameMove,
-  game,
-  type Nag,
-  START_EVAL,
-  START_FEN,
-} from "./data/mockGame";
+import { type GameMove, game, type Nag, START_FEN } from "./data/mockGame";
 
 const GAME_TAB_ID = "game";
+/** Number of engine lines shown in the analysis panel. */
+const ENGINE_LINES = 3;
 
 export default function App() {
   const [tabs, setTabs] = createSignal<WorkspaceTab[]>([
@@ -88,9 +84,17 @@ function GameWorkspace() {
     at === 0 ? START_FEN : list[at - 1]?.fen;
   const fen = () => fenAt(moves, ply()) ?? START_FEN;
   const lastMove = () => (ply() === 0 ? undefined : moves[ply() - 1]);
-  const evals = () => [START_EVAL, ...moves.map((move) => move.eval)];
-  // The placeholder analysis only applies while the line still matches the original game.
-  const analysis = () => (fen() === fenAt(game.moves, ply()) ? analysisByPly[ply()] : undefined);
+
+  const [engineOn, setEngineOn] = createSignal(true);
+  const engine = createEngineAnalysis({ fen, enabled: engineOn, multipv: ENGINE_LINES });
+  const analysis = () => engine.analysisOf(fen());
+  // Plies the engine hasn't looked at yet stay empty in the eval graph.
+  const evals = () =>
+    [START_FEN, ...moves.map((move) => move.fen)].map((at) => positionScore(engine.analysisOf(at)));
+  const arrows = createMemo(() => {
+    const current = analysis();
+    return engineOn() && current ? lineArrows(current) : [];
+  });
   const liveGame = createMemo(() => ({
     ...game,
     variations: game.variations.filter(
@@ -112,8 +116,6 @@ function GameWorkspace() {
       from: input.from,
       to: input.to,
       fen: result.fen,
-      // Placeholder until the engine evaluates user moves.
-      eval: current === 0 ? START_EVAL : moves[current - 1].eval,
     };
     batch(() => {
       setMoves(reconcile([...moves.slice(0, current), move]));
@@ -157,7 +159,7 @@ function GameWorkspace() {
         fen={fen()}
         evals={evals()}
         lastMove={lastMove()}
-        arrows={analysis()?.arrows}
+        arrows={arrows()}
         orientation={orientation()}
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={goTo}
@@ -169,6 +171,9 @@ function GameWorkspace() {
         ply={ply()}
         fen={fen()}
         analysis={analysis()}
+        engineOn={engineOn()}
+        engineError={engine.error()}
+        onToggleEngine={() => setEngineOn((on) => !on)}
         onPly={goTo}
         onToggleNag={toggleNag}
       />
