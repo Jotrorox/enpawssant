@@ -1,12 +1,20 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { batch, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import type { Color } from "./chess/board";
+import { type MoveInput, makeMove } from "./chess/rules";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
-import { analysisByPly, game, type Nag, START_EVAL, START_FEN } from "./data/mockGame";
+import {
+  analysisByPly,
+  type GameMove,
+  game,
+  type Nag,
+  START_EVAL,
+  START_FEN,
+} from "./data/mockGame";
 
 const GAME_TAB_ID = "game";
 
@@ -70,15 +78,48 @@ export default function App() {
 
 function GameWorkspace() {
   const [moves, setMoves] = createStore(structuredClone(game.moves));
-  const maxPly = moves.length;
-  const [ply, setPly] = createSignal(maxPly);
+  const maxPly = () => moves.length;
+  const [ply, setPly] = createSignal(maxPly());
   const [orientation, setOrientation] = createSignal<Color>("w");
 
-  const goTo = (target: number) => setPly(Math.max(0, Math.min(maxPly, target)));
-  const fen = () => (ply() === 0 ? START_FEN : moves[ply() - 1].fen);
+  const goTo = (target: number) => setPly(Math.max(0, Math.min(maxPly(), target)));
+  /** Position after `at` plies of `list`, or `undefined` when the line is shorter than that. */
+  const fenAt = (list: readonly GameMove[], at: number) =>
+    at === 0 ? START_FEN : list[at - 1]?.fen;
+  const fen = () => fenAt(moves, ply()) ?? START_FEN;
   const lastMove = () => (ply() === 0 ? undefined : moves[ply() - 1]);
   const evals = () => [START_EVAL, ...moves.map((move) => move.eval)];
-  const analysis = () => analysisByPly[ply()];
+  // The placeholder analysis only applies while the line still matches the original game.
+  const analysis = () => (fen() === fenAt(game.moves, ply()) ? analysisByPly[ply()] : undefined);
+  const liveGame = createMemo(() => ({
+    ...game,
+    variations: game.variations.filter(
+      (v) => v.ply <= moves.length && fenAt(moves, v.ply - 1) === fenAt(game.moves, v.ply - 1),
+    ),
+  }));
+
+  /** Follows the game when the move matches it; otherwise the new move replaces the rest of it. */
+  const playMove = (input: MoveInput) => {
+    const current = ply();
+    const result = makeMove(fen(), input);
+    if (!result) return;
+    if (moves[current]?.fen === result.fen) {
+      setPly(current + 1);
+      return;
+    }
+    const move: GameMove = {
+      san: result.san,
+      from: input.from,
+      to: input.to,
+      fen: result.fen,
+      // Placeholder until the engine evaluates user moves.
+      eval: current === 0 ? START_EVAL : moves[current - 1].eval,
+    };
+    batch(() => {
+      setMoves(reconcile([...moves.slice(0, current), move]));
+      setPly(current + 1);
+    });
+  };
 
   const toggleNag = (nag: Nag) => {
     if (ply() === 0) return;
@@ -95,7 +136,7 @@ function GameWorkspace() {
         ArrowLeft: () => goTo(ply() - 1),
         ArrowRight: () => goTo(ply() + 1),
         Home: () => goTo(0),
-        End: () => goTo(maxPly),
+        End: () => goTo(maxPly()),
       };
       const action = step[event.key];
       if (action) {
@@ -110,9 +151,9 @@ function GameWorkspace() {
   return (
     <div class="grid h-full grid-cols-[minmax(0,1fr)_minmax(0,1.02fr)] gap-3.5">
       <BoardPanel
-        game={game}
+        game={liveGame()}
         ply={ply()}
-        maxPly={maxPly}
+        maxPly={maxPly()}
         fen={fen()}
         evals={evals()}
         lastMove={lastMove()}
@@ -120,9 +161,10 @@ function GameWorkspace() {
         orientation={orientation()}
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={goTo}
+        onMove={playMove}
       />
       <AnalysisPanel
-        game={game}
+        game={liveGame()}
         moves={moves}
         ply={ply()}
         fen={fen()}

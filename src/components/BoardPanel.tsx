@@ -1,5 +1,7 @@
 import { createSignal, Show } from "solid-js";
 import { type Color, formatEval, whiteShare } from "../chess/board";
+import type { MoveInput } from "../chess/rules";
+import { setSoundEnabled, soundEnabled } from "../chess/sound";
 import type { Arrow, Game, GameMove } from "../data/mockGame";
 import { Board } from "./Board";
 import {
@@ -12,6 +14,8 @@ import {
   NextIcon,
   PencilIcon,
   PrevIcon,
+  SoundOffIcon,
+  SoundOnIcon,
 } from "./Icons";
 import { Card, IconButton } from "./ui";
 
@@ -26,6 +30,7 @@ type BoardPanelProps = {
   orientation: Color;
   onFlip: () => void;
   onPly: (ply: number) => void;
+  onMove: (move: MoveInput) => void;
 };
 
 export function BoardPanel(props: BoardPanelProps) {
@@ -42,6 +47,8 @@ export function BoardPanel(props: BoardPanelProps) {
               orientation={props.orientation}
               lastMove={props.lastMove}
               arrows={props.arrows}
+              onMove={props.onMove}
+              sound={soundEnabled()}
             />
           </div>
         </div>
@@ -146,6 +153,14 @@ function BoardToolbar(props: {
       <IconButton label={copied() ? "FEN copied" : "Copy FEN"} onClick={copyFen}>
         <Show when={copied()} fallback={<CopyIcon />}>
           <CheckIcon class="size-5 text-nag-good" />
+        </Show>
+      </IconButton>
+      <IconButton
+        label={soundEnabled() ? "Mute move sounds" : "Unmute move sounds"}
+        onClick={() => setSoundEnabled(!soundEnabled())}
+      >
+        <Show when={soundEnabled()} fallback={<SoundOffIcon />}>
+          <SoundOnIcon />
         </Show>
       </IconButton>
 

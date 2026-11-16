@@ -162,6 +162,10 @@ export const analysisByPly: Record<number, Analysis> = {
   },
 };
 
+/** The position the placeholder explorer data belongs to (the end of the sample game). */
+export const EXPLORER_FEN =
+  "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5";
+
 export type ExplorerSource = "masters" | "online" | "mine";
 
 /** Opening explorer results keyed by source, for the final position only. */

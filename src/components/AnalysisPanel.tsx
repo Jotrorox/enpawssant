@@ -3,6 +3,7 @@ import { createResource, createSignal, For, Match, type Resource, Show, Switch }
 import { formatEval, moveNumberPrefix } from "../chess/board";
 import {
   type Analysis,
+  EXPLORER_FEN,
   type ExplorerRow,
   type ExplorerSource,
   explorer,
@@ -59,7 +60,7 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         }
       >
         <EngineCard engine={engine} ply={props.ply} analysis={props.analysis} />
-        <ExplorerCard ply={props.ply} maxPly={props.moves.length} />
+        <ExplorerCard hasData={props.fen === EXPLORER_FEN} />
         <Notation
           moves={props.moves}
           variations={props.game.variations}
@@ -190,10 +191,10 @@ const EXPLORER_SOURCES = [
   { value: "mine", label: "My games" },
 ] as const;
 
-function ExplorerCard(props: { ply: number; maxPly: number }) {
+function ExplorerCard(props: { hasData: boolean }) {
   const [source, setSource] = createSignal<ExplorerSource>("masters");
-  // The placeholder data only covers the final position.
-  const rows = () => (props.ply === props.maxPly ? explorer[source()] : []);
+  // The placeholder data only covers the final position of the sample game.
+  const rows = () => (props.hasData ? explorer[source()] : []);
 
   return (
     <Card class="shrink-0 px-[18px] pt-3 pb-3">

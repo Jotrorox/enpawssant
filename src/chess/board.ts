@@ -77,3 +77,8 @@ export function moveNumberPrefix(plyIndex: number, forceBlack = false): string |
   if (plyIndex % 2 === 0) return `${number}.`;
   return forceBlack ? `${number}...` : undefined;
 }
+
+/** Square at a grid cell (column, row) for the given board orientation. */
+export function cellToSquare(x: number, y: number, orientation: Color): Square {
+  return orientation === "w" ? `${FILES[x]}${8 - y}` : `${FILES[7 - x]}${y + 1}`;
+}

@@ -85,6 +85,20 @@ export const FlipIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const SoundOnIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M4 9.5v5h3.5L12 18V6L7.5 9.5z" />
+    <path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" />
+  </Stroke>
+);
+
+export const SoundOffIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M4 9.5v5h3.5L12 18V6L7.5 9.5z" />
+    <path d="M16 10l4 4M20 10l-4 4" />
+  </Stroke>
+);
+
 export const PencilIcon = (p: IconProps) => (
   <Stroke {...p}>
     <path d="M15 5l4 4L8 20H4v-4z" />

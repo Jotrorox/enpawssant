@@ -2,8 +2,21 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the game view UI is in place but runs on placeholder data; only the engine name
-> comes from the bundled Stockfish.
+> Early foundation: the game view UI is in place and the board is fully playable, but the game,
+> analysis and explorer are placeholder data; only the engine name comes from the bundled Stockfish.
+
+## The board
+
+The board is written from scratch, with no chess or UI libraries. Move generation (castling,
+en passant, promotion, check and SAN) lives in `src/chess/rules.ts`.
+
+- Drag pieces or click a piece and then its target. Legal moves are shown as dots and capture rings.
+- Pieces lift under the pointer, glide between squares and land with a little squash and ripple.
+  Captures burst, promotions sparkle, a checked king wobbles and a checkmated one tips over.
+- Right-click or right-drag to draw circles and arrows (hold Shift, Alt or both for other colours).
+- Sounds are synthesised with Web Audio (wooden knocks, a collar-bell "ting" for check, chimes for
+  promotion and mate), timed to the moment a piece lands. Mute them from the board toolbar.
+- Animations respect the system's reduced-motion setting.
 
 ## Prerequisites
 
@@ -49,6 +62,8 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 ├── scripts/
 │   └── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 ├── src/                    # SolidJS + TypeScript frontend
+│   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
+│   └── chess/              # Board helpers, move rules, piece images, move sounds
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
@@ -64,3 +79,5 @@ backend through Tauri commands such as `engine_info`.
 ## License
 
 BSD 3-Clause, see [LICENSE](LICENSE). Stockfish is downloaded separately and is licensed under the GPLv3.
+The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
+[src/assets/pieces/README.md](src/assets/pieces/README.md).
