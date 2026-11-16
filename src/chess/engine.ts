@@ -6,7 +6,18 @@ import { createStore } from "solid-js/store";
 import { type Arrow, fenTurn } from "./board";
 import { type GameResult, type Score, shareFor } from "./score";
 
-export type EngineInfo = { name: string; threads: number; hashMb: number };
+/** The values an engine option can take. */
+export type StrengthRange = { min: number; max: number; default: number };
+
+export type EngineInfo = {
+  name: string;
+  threads: number;
+  hashMb: number;
+  /** The Elo range the engine can limit itself to, if it can. */
+  elo: StrengthRange | null;
+  /** The range of its skill levels, if it has them. */
+  skill: StrengthRange | null;
+};
 
 export type EngineLine = {
   multipv: number;
@@ -33,8 +44,11 @@ export type AnalysisUpdate = {
 
 type EngineEvent =
   | ({ type: "update" } & AnalysisUpdate)
-  /** Ends every search; `complete` when it reached its depth rather than being replaced. */
-  | { type: "done"; complete: boolean }
+  /**
+   * Ends every search; `complete` when it ended on its own rather than being replaced or stopped.
+   * A completed search names the move the engine chose.
+   */
+  | { type: "done"; complete: boolean; bestmove?: string }
   | { type: "error"; message: string };
 
 /** Progress of a full-game review, in positions. */
@@ -210,4 +224,70 @@ export function lineArrows(update: AnalysisUpdate): Arrow[] {
       return arrow(line, Math.min(0.6, Math.max(0.15, 0.6 - 3 * loss)));
     }),
   ];
+}
+
+/** How strongly the opponent plays: limited to an Elo, or at one of Stockfish's skill levels. */
+export type Strength = { elo: number } | { skill: number };
+
+/** Both players' time left and increments, in milliseconds. */
+export type OpponentClock = {
+  whiteMs: number;
+  blackMs: number;
+  whiteIncMs: number;
+  blackIncMs: number;
+};
+
+export type OpponentRequest = {
+  /** Where the game started. */
+  fen: string;
+  /** UCI moves played since, so the engine sees repetitions. */
+  moves: string[];
+  strength: Strength;
+  /** Without a clock the engine thinks for about a second. */
+  clock?: OpponentClock;
+  /** Set for the first request of a game, so the engine forgets the last one. */
+  newGame: boolean;
+};
+
+/** Starts the engine that games are played against and describes it. */
+export const fetchOpponentInfo = () => invoke<EngineInfo>("opponent_info");
+
+/** There is one opponent engine, so games in different tabs take turns asking it. */
+let opponentQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Asks the opponent engine for its move, in UCI notation. Resolves with `undefined` when `signal`
+ * aborts first, and rejects when the engine fails.
+ */
+export function requestOpponentMove(
+  request: OpponentRequest,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const turn = opponentQueue.then(() =>
+    signal.aborted ? undefined : searchOpponentMove(request, signal),
+  );
+  opponentQueue = turn.catch(() => {});
+  return turn;
+}
+
+function searchOpponentMove(request: OpponentRequest, signal: AbortSignal) {
+  return new Promise<string | undefined>((resolve, reject) => {
+    const stop = () => void invoke("opponent_stop").catch(() => {});
+    signal.addEventListener("abort", stop, { once: true });
+    const settle = (finish: () => void) => {
+      signal.removeEventListener("abort", stop);
+      finish();
+    };
+    const channel = new Channel<EngineEvent>();
+    channel.onmessage = (event) => {
+      if (event.type === "done") {
+        settle(() => resolve(event.complete && !signal.aborted ? event.bestmove : undefined));
+      } else if (event.type === "error") {
+        settle(() => reject(new Error(event.message)));
+      }
+    };
+    invoke("opponent_move", { ...request, clock: request.clock ?? null, onEvent: channel }).catch(
+      (reason) => settle(() => reject(new Error(String(reason)))),
+    );
+  });
 }

@@ -1,4 +1,4 @@
-import { createEffect, createResource, createSignal, For, type JSX, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import {
   exportPgn,
   header,
@@ -9,46 +9,11 @@ import {
   savePgnFile,
 } from "../chess/pgn";
 import { type GameSession, gameTitle } from "../game/session";
-import { CheckIcon, CloseIcon, CopyIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
-import { EmptyState, IconButton, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./ui";
+import { CheckIcon, CopyIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
+import { EmptyState, Modal, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./ui";
 
 /** Rejections from Tauri commands are plain strings; anything else is an unexpected error. */
 const errorMessage = (error: unknown) => (typeof error === "string" ? error : String(error));
-
-function Modal(props: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  children: JSX.Element;
-}) {
-  let dialog!: HTMLDialogElement;
-  createEffect(() => {
-    if (props.open && !dialog.open) dialog.showModal();
-    else if (!props.open && dialog.open) dialog.close();
-  });
-
-  return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes the dialog natively.
-    <dialog
-      ref={dialog}
-      aria-label={props.title}
-      onClose={() => props.onClose()}
-      // Clicks on the backdrop land on the dialog element itself.
-      onClick={(event) => event.target === dialog && dialog.close()}
-      class="m-auto w-[min(640px,calc(100vw-32px))] rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30"
-    >
-      <div class="flex max-h-[calc(100vh-64px)] flex-col gap-3 p-5">
-        <div class="flex items-center">
-          <h2 class="font-display text-[17px] font-semibold">{props.title}</h2>
-          <IconButton label="Close" class="ml-auto" onClick={() => dialog.close()}>
-            <CloseIcon class="size-4" />
-          </IconButton>
-        </div>
-        {props.children}
-      </div>
-    </dialog>
-  );
-}
 
 type ImportDialogProps = {
   open: boolean;

@@ -1,4 +1,5 @@
-import { For, type JSX, splitProps } from "solid-js";
+import { createEffect, For, type JSX, splitProps } from "solid-js";
+import { CloseIcon } from "./Icons";
 
 /** Class names for a main action button and a secondary one. */
 export const PRIMARY_BUTTON =
@@ -94,5 +95,41 @@ export function EmptyState(props: { children: JSX.Element; class?: string }) {
     >
       {props.children}
     </div>
+  );
+}
+
+/** A modal dialog; Escape, the close button and clicks on the backdrop call `onClose`. */
+export function Modal(props: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: JSX.Element;
+}) {
+  let dialog!: HTMLDialogElement;
+  createEffect(() => {
+    if (props.open && !dialog.open) dialog.showModal();
+    else if (!props.open && dialog.open) dialog.close();
+  });
+
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes the dialog natively.
+    <dialog
+      ref={dialog}
+      aria-label={props.title}
+      onClose={() => props.onClose()}
+      // Clicks on the backdrop land on the dialog element itself.
+      onClick={(event) => event.target === dialog && dialog.close()}
+      class="m-auto w-[min(640px,calc(100vw-32px))] rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30"
+    >
+      <div class="flex max-h-[calc(100vh-64px)] flex-col gap-3 p-5">
+        <div class="flex items-center">
+          <h2 class="font-display text-[17px] font-semibold">{props.title}</h2>
+          <IconButton label="Close" class="ml-auto" onClick={() => dialog.close()}>
+            <CloseIcon class="size-4" />
+          </IconButton>
+        </div>
+        {props.children}
+      </div>
+    </dialog>
   );
 }

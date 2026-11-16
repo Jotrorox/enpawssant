@@ -45,7 +45,7 @@ export type SessionOptions = {
 export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
   return createRoot((dispose) => {
     const [tree, setTree] = createStore<GameTree>(treeFromPgn(game));
-    const [headers] = createSignal(game.headers);
+    const [headers, setHeaders] = createSignal(game.headers);
     const [currentId, setCurrentId] = createSignal(nodeAtIndexPath(tree, options.position ?? []));
     /**
      * The last node of the line shown in the toolbar and eval graph. It stays put while stepping
@@ -93,17 +93,35 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       if (next) goTo(next);
     };
 
-    /** Plays a move from the current position, following an existing move or adding a variation. */
-    const play = (input: MoveInput) => {
-      const result = makeMove(node().fen, input);
-      if (!result) return;
-      let id = currentId();
+    /**
+     * Plays a move after `parentId`, following an existing move or adding a variation, and moves
+     * there when `follow` is set. Returns the move's node, or `undefined` if the move is illegal.
+     */
+    const playFrom = (parentId: NodeId, input: MoveInput, follow = true): NodeId | undefined => {
+      const result = makeMove(tree.nodes[parentId].fen, input);
+      if (!result) return undefined;
+      let id = parentId;
       setTree(
         produce((draft) => {
           id = addMove(draft, id, result);
         }),
       );
-      goTo(id);
+      if (follow) goTo(id);
+      return id;
+    };
+
+    /** Plays a move from the current position. */
+    const play = (input: MoveInput) => {
+      playFrom(currentId(), input);
+    };
+
+    /** Sets a header, replacing an existing one with the same name. */
+    const setHeader = (name: string, value: string) => {
+      setHeaders((current) =>
+        current.some(([key]) => key === name)
+          ? current.map(([key, old]): [string, string] => [key, key === name ? value : old])
+          : [...current, [name, value]],
+      );
     };
 
     const toggleNag = (nag: Nag) => {
@@ -152,6 +170,8 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       first: () => goToIndex(0),
       last: () => goToIndex(line().length - 1),
       play,
+      playFrom,
+      setHeader,
       toggleNag,
       review,
       remove,

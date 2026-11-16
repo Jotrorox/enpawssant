@@ -23,6 +23,12 @@ export type Position = {
 /** A move as the user makes it on the board. */
 export type MoveInput = { from: Square; to: Square; promotion?: PieceType };
 
+/** A move in UCI notation, such as `e2e4` or `e7e8q`, as board input. */
+export function parseUciMove(uci: string): MoveInput {
+  const promotion = uci[4] as PieceType | undefined;
+  return { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: promotion || undefined };
+}
+
 type Move = {
   from: number;
   to: number;

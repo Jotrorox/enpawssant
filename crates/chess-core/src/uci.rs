@@ -118,6 +118,54 @@ pub fn is_bestmove(line: &str) -> bool {
     line.split_whitespace().next() == Some("bestmove")
 }
 
+/// The move of a `bestmove` line, or `None` for other lines and for
+/// `bestmove (none)`, which engines send when there is no legal move.
+pub fn parse_bestmove(line: &str) -> Option<&str> {
+    let mut tokens = line.split_whitespace();
+    match (tokens.next(), tokens.next()) {
+        (Some("bestmove"), Some(mv)) if mv != "(none)" => Some(mv),
+        _ => None,
+    }
+}
+
+/// A numeric engine option, from an `option name <name> type spin ...` line.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SpinOption {
+    pub default: i64,
+    pub min: i64,
+    pub max: i64,
+}
+
+/// Parses an `option` line declaring a `spin` option. Returns its name and
+/// bounds, or `None` for any other line.
+pub fn parse_spin_option(line: &str) -> Option<(&str, SpinOption)> {
+    let rest = line.strip_prefix("option name ")?;
+    // Names may contain spaces, so the name runs up to the `type` keyword.
+    let (name, rest) = rest.split_once(" type ")?;
+    let mut tokens = rest.split_whitespace();
+    if tokens.next()? != "spin" {
+        return None;
+    }
+    let (mut default, mut min, mut max) = (None, None, None);
+    while let Some(keyword) = tokens.next() {
+        let value = tokens.next()?.parse().ok()?;
+        match keyword {
+            "default" => default = Some(value),
+            "min" => min = Some(value),
+            "max" => max = Some(value),
+            _ => {}
+        }
+    }
+    Some((
+        name.trim(),
+        SpinOption {
+            default: default?,
+            min: min?,
+            max: max?,
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +227,49 @@ mod tests {
         assert!(is_bestmove("bestmove e2e4 ponder e7e5"));
         assert!(is_bestmove("bestmove (none)"));
         assert!(!is_bestmove("info string bestmove"));
+    }
+
+    #[test]
+    fn parses_bestmove() {
+        assert_eq!(parse_bestmove("bestmove e2e4 ponder e7e5"), Some("e2e4"));
+        assert_eq!(parse_bestmove("bestmove e7e8q"), Some("e7e8q"));
+        assert_eq!(parse_bestmove("bestmove (none)"), None);
+        assert_eq!(parse_bestmove("bestmove"), None);
+        assert_eq!(parse_bestmove("info pv e2e4"), None);
+    }
+
+    #[test]
+    fn parses_spin_options() {
+        assert_eq!(
+            parse_spin_option("option name UCI_Elo type spin default 1320 min 1320 max 3190"),
+            Some((
+                "UCI_Elo",
+                SpinOption {
+                    default: 1320,
+                    min: 1320,
+                    max: 3190
+                }
+            ))
+        );
+        assert_eq!(
+            parse_spin_option("option name Skill Level type spin default 20 min 0 max 20"),
+            Some((
+                "Skill Level",
+                SpinOption {
+                    default: 20,
+                    min: 0,
+                    max: 20
+                }
+            ))
+        );
+        assert_eq!(
+            parse_spin_option("option name UCI_LimitStrength type check default false"),
+            None
+        );
+        assert_eq!(
+            parse_spin_option("option name Clear Hash type button"),
+            None
+        );
+        assert_eq!(parse_spin_option("id name Stockfish 19"), None);
     }
 }

@@ -3,7 +3,8 @@
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
 > Early foundation: the board is fully playable, the bundled Stockfish analyses every position live,
-> games can be imported and exported as PGN and the opening explorer shows Lichess statistics.
+> games can be imported and exported as PGN, the opening explorer shows Lichess statistics and you
+> can play against Stockfish with a clock.
 
 ## The board
 
@@ -29,6 +30,27 @@ the arrows, depth and speed, and the eval graph for every ply analysed so far.
 Moving to another position stops the running search, waits for the engine to finish it and only
 then starts the new one, so stale lines never reach the board. Checkmate and stalemate are answered
 without asking the engine.
+
+## Play vs Stockfish
+
+The clock button in the board toolbar starts a game against Stockfish in a new tab.
+
+- Pick your colour (or a random one), the engine's strength as an **Elo** (Stockfish's
+  `UCI_LimitStrength`, 1320–3190) or a **skill level** (0–20, where 20 is full strength), and a time
+  control: untimed, a preset such as 5+3, or your own minutes and increment. Games can start from
+  the starting position or from the position on the board. The dialog remembers your last choices.
+- The opponent is a second Stockfish process with one thread, so its strength settings never touch
+  the analysis engine. It gets the whole game as moves (so it sees repetitions) and both clocks with
+  `go wtime … btime …`, keeping 100 ms per move in reserve for the trip to the UI. Untimed games give
+  it about a second per move.
+- The clocks run in the app and keep running while another tab is open. Checkmate, stalemate,
+  threefold repetition, the fifty-move rule and dead positions end the game automatically; running
+  out of time loses unless the other side has nothing left to mate with. Resigning takes two clicks.
+- Live analysis, the eval bar, arrows, the opening explorer and full-game analysis wait until the
+  game is over. You can step back through the moves meanwhile; the board takes your move again once
+  you're back at the end.
+- The game is an ordinary tab: its result and time control go into the PGN headers, and when it
+  ends everything is there to analyse it.
 
 ## Games
 
@@ -118,13 +140,13 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 │   └── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 ├── src/                    # SolidJS + TypeScript frontend
 │   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
-│   ├── chess/              # Board helpers, move rules, move tree, PGN types, piece images, sounds
-│   └── game/               # Game sessions: a tab's move tree, headers and current position
+│   ├── chess/              # Board helpers, move rules, game endings, move tree, PGN, pieces, sounds
+│   └── game/               # Game sessions, games against the engine and their clocks
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
-    │   ├── engine.rs       # Stockfish session: spawns it, runs searches, streams analysis
+    │   ├── engine.rs       # Stockfish sessions: analysis and the opponent you play against
     │   ├── explorer.rs     # Opening explorer and opening name commands
     │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
     │   ├── pgn.rs          # PGN import/export commands and file dialogs
