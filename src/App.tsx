@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { type Color, START_FEN } from "./chess/board";
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import type { PgnGame } from "./chess/pgn";
@@ -8,31 +8,57 @@ import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
-import { sampleAccuracy, sampleGame } from "./data/mockGame";
 import { createGameSession, type GameSession, gameTitle } from "./game/session";
+import { loadWorkspace, saveWorkspace } from "./game/workspace";
 
 /** Number of engine lines shown in the analysis panel. */
 const ENGINE_LINES = 3;
 
-/** A workspace tab. Tabs without a session are placeholders for features still to come. */
-type Tab = WorkspaceTab & { session?: GameSession };
+/** A workspace tab and the game open in it. */
+type Tab = WorkspaceTab & { session: GameSession };
 
 export default function App() {
-  const [tabs, setTabs] = createSignal<Tab[]>([
-    {
-      id: "sample",
-      title: gameTitle(sampleGame),
-      live: true,
-      session: createGameSession(sampleGame, { accuracy: sampleAccuracy }),
-    },
-    { id: "prep", title: "Opening prep · Italian" },
-    { id: "puzzle", title: "Purrzle #2451" },
-  ]);
-  const [activeId, setActiveId] = createSignal<string | undefined>("sample");
+  let opened = 0;
+  const createTab = (game: PgnGame, title = gameTitle(game), position?: number[]): Tab => {
+    opened += 1;
+    return { id: `game-${opened}`, title, session: createGameSession(game, { position }) };
+  };
+  const createBoard = () => createTab({ headers: [], startFen: START_FEN, moves: [] }, "New board");
+
+  // Reopen the tabs from last time, or start on an empty board.
+  const saved = loadWorkspace();
+  const restored = (saved?.tabs ?? []).flatMap((tab) => {
+    try {
+      return [createTab(tab.game, tab.title, tab.position)];
+    } catch {
+      // A game that no longer loads is dropped rather than blocking startup.
+      return [];
+    }
+  });
+  const initialTabs = restored.length > 0 ? restored : [createBoard()];
+  const initialActive = initialTabs[Math.min(saved?.active ?? 0, initialTabs.length - 1)];
+
+  const [tabs, setTabs] = createSignal<Tab[]>(initialTabs);
+  const [activeId, setActiveId] = createSignal<string | undefined>(initialActive.id);
   const activeTab = () => tabs().find((tab) => tab.id === activeId());
   const [importing, setImporting] = createSignal(false);
   const [exporting, setExporting] = createSignal(false);
-  let opened = 0;
+
+  // Save on every change to the open games, positions or tab selection. A game is small, so
+  // writing it all again is cheap and nothing is lost when the window closes.
+  createEffect(() => {
+    saveWorkspace({
+      tabs: tabs().map((tab) => ({
+        title: tab.title,
+        game: tab.session.toPgn(),
+        position: tab.session.position(),
+      })),
+      active: Math.max(
+        0,
+        tabs().findIndex((tab) => tab.id === activeId()),
+      ),
+    });
+  });
 
   const closeTab = (id: string) => {
     const index = tabs().findIndex((tab) => tab.id === id);
@@ -40,23 +66,17 @@ export default function App() {
     const remaining = tabs().filter((tab) => tab.id !== id);
     if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
-    closing?.session?.dispose();
+    closing?.session.dispose();
   };
 
-  const openGames = (games: PgnGame[], title?: string) => {
-    const created = games.map((game) => {
-      opened += 1;
-      return {
-        id: `game-${opened}`,
-        title: title ?? gameTitle(game),
-        session: createGameSession(game),
-      };
-    });
+  const openTabs = (created: Tab[]) => {
     setTabs([...tabs(), ...created]);
     setActiveId(created[0]?.id);
   };
 
-  const newTab = () => openGames([{ headers: [], startFen: START_FEN, moves: [] }], "New board");
+  const openGames = (games: PgnGame[]) => openTabs(games.map((game) => createTab(game)));
+
+  const newTab = () => openTabs([createBoard()]);
 
   return (
     <div class="flex h-full flex-col">
@@ -71,20 +91,27 @@ export default function App() {
         <SideRail />
         <main class="min-w-0 flex-1">
           <Show
-            when={activeTab()?.session}
+            when={activeTab()}
             keyed
             fallback={
               <div class="grid h-full place-items-center p-8">
-                <EmptyState class="w-full max-w-md">
-                  <span class="font-bold text-ink">{activeTab()?.title ?? "No tabs open"}</span>
-                  <span>Nothing here yet. This board is still curled up asleep.</span>
+                <EmptyState class="w-full max-w-md gap-1">
+                  <span class="font-bold text-ink">No tabs open</span>
+                  <span>The board is curled up asleep.</span>
+                  <button
+                    type="button"
+                    onClick={newTab}
+                    class="mt-2 h-9 rounded-xl bg-blush-100 px-4 text-[14px] font-bold text-ink transition-colors hover:bg-blush-200"
+                  >
+                    Open a new board
+                  </button>
                 </EmptyState>
               </div>
             }
           >
-            {(session) => (
+            {(tab) => (
               <GameWorkspace
-                session={session}
+                session={tab.session}
                 onImport={() => setImporting(true)}
                 onExport={() => setExporting(true)}
               />

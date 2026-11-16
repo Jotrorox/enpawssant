@@ -117,6 +117,26 @@ export function pathTo(tree: GameTree, id: NodeId): NodeId[] {
   return path.reverse();
 }
 
+/**
+ * The child index chosen at each move from the root to `id` (0 for the main move). Unlike node ids,
+ * it stays the same across a PGN round trip.
+ */
+export function indexPath(tree: GameTree, id: NodeId): number[] {
+  const path = pathTo(tree, id);
+  return path.slice(1).map((nodeId, i) => tree.nodes[path[i]].children.indexOf(nodeId));
+}
+
+/** The node reached by following `indices` from the root, stopping where the tree runs out. */
+export function nodeAtIndexPath(tree: GameTree, indices: number[]): NodeId {
+  let id = tree.rootId;
+  for (const index of indices) {
+    const next = tree.nodes[id].children[index];
+    if (next === undefined) break;
+    id = next;
+  }
+  return id;
+}
+
 /** The last node reached by following first children from `id`. */
 export function lineEnd(tree: GameTree, id: NodeId): NodeId {
   let node = tree.nodes[id];

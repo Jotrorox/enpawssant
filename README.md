@@ -3,8 +3,7 @@
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
 > Early foundation: the board is fully playable, the bundled Stockfish analyses every position live
-> and games can be imported and exported as PGN, but the sample game and the opening explorer are
-> still placeholder data.
+> and games can be imported and exported as PGN, but the opening explorer is still placeholder data.
 
 ## The board
 
@@ -47,6 +46,8 @@ game away: it becomes a variation.
   `[%eval]` scores are kept, and illegal moves are skipped with a warning. Imported scores fill
   the eval bar and graph for positions the engine hasn't analysed yet.
 - **Export PGN** shows the game as PGN to copy or save, including variations, comments and NAGs.
+- Open tabs are saved as you go (games, variations, comments and the current position) and reopen
+  on the next launch. With nothing to restore, the app starts on an empty board.
 
 PGN parsing and writing happen in Rust (`crates/chess-core/src/pgn.rs`, built on `shakmaty` and
 `pgn-reader`). File dialogs are opened from Rust too, so the frontend needs no file system or dialog
