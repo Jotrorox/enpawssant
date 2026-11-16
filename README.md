@@ -2,7 +2,8 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the app currently only starts the bundled Stockfish engine and shows its name.
+> Early foundation: the game view UI is in place but runs on placeholder data; only the engine name
+> comes from the bundled Stockfish.
 
 ## Prerequisites
 
