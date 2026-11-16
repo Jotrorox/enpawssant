@@ -5,7 +5,9 @@ import { batch, createMemo, createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { type Nag, toggleQualityNag } from "../chess/nag";
 import { header, type PgnGame } from "../chess/pgn";
+import { type Accuracy, applyReview, mainlineAccuracy } from "../chess/review";
 import { type MoveInput, makeMove } from "../chess/rules";
+import type { Score } from "../chess/score";
 import {
   addMove,
   deleteNode,
@@ -18,7 +20,6 @@ import {
   treeFromPgn,
   treeToPgn,
 } from "../chess/tree";
-import type { Accuracy } from "../data/mockGame";
 
 export type Player = { name: string; rating?: string };
 
@@ -27,13 +28,14 @@ export type GameInfo = {
   black: Player;
   eco?: string;
   opening?: string;
+  /** Known once every main-line position has an evaluation, e.g. after a game review. */
   accuracy?: Accuracy;
 };
 
 export type GameSession = ReturnType<typeof createGameSession>;
 
 /** Creates a session for `game`. Call `dispose` when its tab closes. */
-export function createGameSession(game: PgnGame, options: { accuracy?: Accuracy } = {}) {
+export function createGameSession(game: PgnGame) {
   return createRoot((dispose) => {
     const [tree, setTree] = createStore<GameTree>(treeFromPgn(game));
     const [headers] = createSignal(game.headers);
@@ -48,6 +50,7 @@ export function createGameSession(game: PgnGame, options: { accuracy?: Accuracy 
     const line = createMemo(() => pathTo(tree, lineEndId()));
     /** Index of the current node in `line()`; 0 is the starting position. */
     const index = () => node().ply - tree.nodes[tree.rootId].ply;
+    const accuracy = createMemo(() => mainlineAccuracy(tree));
     const info = createMemo((): GameInfo => {
       const game = { headers: headers() };
       return {
@@ -55,7 +58,7 @@ export function createGameSession(game: PgnGame, options: { accuracy?: Accuracy 
         black: { name: header(game, "Black") ?? "Black", rating: header(game, "BlackElo") },
         eco: header(game, "ECO"),
         opening: header(game, "Opening"),
-        accuracy: options.accuracy,
+        accuracy: accuracy(),
       };
     });
 
@@ -116,6 +119,11 @@ export function createGameSession(game: PgnGame, options: { accuracy?: Accuracy 
       });
     };
 
+    /** Stores engine evaluations by node and annotates the main line's weak moves with them. */
+    const review = (scores: ReadonlyMap<NodeId, Score>) => {
+      setTree(produce((draft) => applyReview(draft, scores)));
+    };
+
     const promote = (id: NodeId) => {
       if (!tree.nodes[id]) return;
       setTree(produce((draft) => makeMainline(draft, id)));
@@ -138,6 +146,7 @@ export function createGameSession(game: PgnGame, options: { accuracy?: Accuracy 
       last: () => goToIndex(line().length - 1),
       play,
       toggleNag,
+      review,
       remove,
       promote,
       toPgn: () => treeToPgn(tree, headers()),

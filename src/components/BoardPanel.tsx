@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { Arrow, Color, Square } from "../chess/board";
+import type { ReviewProgress } from "../chess/engine";
 import type { MoveInput } from "../chess/rules";
 import { barLabel, formatScore, plotPawns, type Score, whiteShare } from "../chess/score";
 import { setSoundEnabled, soundEnabled } from "../chess/sound";
@@ -38,6 +39,11 @@ type BoardPanelProps = {
   onMove: (move: MoveInput) => void;
   onImport: () => void;
   onExport: () => void;
+  /** Progress of the running full-game analysis, if one is running. */
+  review?: ReviewProgress;
+  reviewError?: string;
+  onReview: () => void;
+  onCancelReview: () => void;
 };
 
 export function BoardPanel(props: BoardPanelProps) {
@@ -69,10 +75,14 @@ export function BoardPanel(props: BoardPanelProps) {
         onPly={props.onPly}
         onImport={props.onImport}
         onExport={props.onExport}
+        review={props.review}
+        onReview={props.onReview}
+        onCancelReview={props.onCancelReview}
       />
 
       <EvalGraph
         info={props.info}
+        reviewError={props.reviewError}
         evals={props.evals}
         ply={props.ply}
         maxPly={props.maxPly}
@@ -151,6 +161,9 @@ function BoardToolbar(props: {
   onPly: (ply: number) => void;
   onImport: () => void;
   onExport: () => void;
+  review?: ReviewProgress;
+  onReview: () => void;
+  onCancelReview: () => void;
 }) {
   const [copied, setCopied] = createSignal(false);
   let resetTimer: number | undefined;
@@ -229,19 +242,46 @@ function BoardToolbar(props: {
         <LastIcon />
       </IconButton>
 
-      <button
-        type="button"
-        class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300"
+      <Show
+        when={props.review}
+        fallback={
+          <button
+            type="button"
+            onClick={() => props.onReview()}
+            class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300"
+          >
+            <ChartIcon class="size-[18px]" />
+            Analyze full game
+          </button>
+        }
       >
-        <ChartIcon class="size-[18px]" />
-        Analyze full game
-      </button>
+        {(review) => (
+          <button
+            type="button"
+            onClick={() => props.onCancelReview()}
+            title="Stop the analysis"
+            class="relative ml-auto flex h-9 items-center gap-2.5 overflow-hidden rounded-xl bg-blush-200 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)]"
+          >
+            <span
+              aria-hidden="true"
+              class="absolute inset-y-0 left-0 bg-blush-400 transition-[width] duration-300"
+              style={{ width: `${(review().done / Math.max(1, review().total)) * 100}%` }}
+            />
+            <span class="relative flex items-center gap-2.5 tabular-nums">
+              <ChartIcon class="size-[18px]" />
+              Analyzing… {review().done}/{review().total}
+              <span class="sr-only">positions. Press to stop.</span>
+            </span>
+          </button>
+        )}
+      </Show>
     </div>
   );
 }
 
 function EvalGraph(props: {
   info: GameInfo;
+  reviewError?: string;
   evals: (Score | undefined)[];
   ply: number;
   maxPly: number;
@@ -284,12 +324,19 @@ function EvalGraph(props: {
             <>
               <span class="text-ink/70">Accuracy</span>
               <span class="rounded-full bg-blush-100 px-2.5 py-px font-bold">
-                {props.info.white.name} {accuracy().white}
+                {props.info.white.name} {Math.round(accuracy().white)}
               </span>
               <span class="rounded-full bg-plum px-2.5 py-px font-bold text-white">
-                {props.info.black.name} {accuracy().black}
+                {props.info.black.name} {Math.round(accuracy().black)}
               </span>
             </>
+          )}
+        </Show>
+        <Show when={props.reviewError}>
+          {(error) => (
+            <span class="truncate text-error" title={error()}>
+              Analysis stopped: {error()}
+            </span>
           )}
         </Show>
         <span class="ml-auto font-mono text-[12px] text-ink/75">

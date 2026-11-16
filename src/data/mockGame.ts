@@ -11,9 +11,6 @@ export type ExplorerRow = {
   black: number;
 };
 
-/** Accuracy per side in percent, until the engine computes it. */
-export type Accuracy = { white: number; black: number };
-
 /** The sample game, in the shape the Rust PGN reader produces. Evaluations come from the engine. */
 export const sampleGame: PgnGame = {
   headers: [
@@ -102,8 +99,6 @@ export const sampleGame: PgnGame = {
     },
   ],
 };
-
-export const sampleAccuracy: Accuracy = { white: 94, black: 89 };
 
 /** The position the placeholder explorer data belongs to (the end of the sample game). */
 export const EXPLORER_FEN =

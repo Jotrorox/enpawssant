@@ -2,17 +2,22 @@ import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { type Color, START_FEN } from "./chess/board";
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import type { PgnGame } from "./chess/pgn";
+import { mainline } from "./chess/review";
+import type { Score } from "./chess/score";
+import type { NodeId } from "./chess/tree";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
 import { SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState } from "./components/ui";
-import { sampleAccuracy, sampleGame } from "./data/mockGame";
+import { sampleGame } from "./data/mockGame";
 import { createGameSession, type GameSession, gameTitle } from "./game/session";
 
 /** Number of engine lines shown in the analysis panel. */
 const ENGINE_LINES = 3;
+/** Depth every position is searched to by "Analyze full game". */
+const REVIEW_DEPTH = 16;
 
 /** A workspace tab. Tabs without a session are placeholders for features still to come. */
 type Tab = WorkspaceTab & { session?: GameSession };
@@ -23,7 +28,7 @@ export default function App() {
       id: "sample",
       title: gameTitle(sampleGame),
       live: true,
-      session: createGameSession(sampleGame, { accuracy: sampleAccuracy }),
+      session: createGameSession(sampleGame),
     },
     { id: "prep", title: "Opening prep · Italian" },
     { id: "puzzle", title: "Purrzle #2451" },
@@ -125,6 +130,23 @@ function GameWorkspace(props: {
   };
   // Positions without either stay empty in the eval graph.
   const evals = createMemo(() => session.line().map(scoreOf));
+
+  /** Searches every main-line position to a fixed depth, then stores and judges the results. */
+  const reviewGame = async () => {
+    const ids = mainline(session.tree);
+    const scores = await engine.review(
+      ids.map((id) => session.tree.nodes[id].fen),
+      REVIEW_DEPTH,
+    );
+    if (!scores) return;
+    const byNode = new Map<NodeId, Score>();
+    ids.forEach((id, index) => {
+      const score = scores[index];
+      if (score) byNode.set(id, score);
+    });
+    session.review(byNode);
+  };
+
   const arrows = createMemo(() => {
     const current = analysis();
     return engineOn() && current ? lineArrows(current) : [];
@@ -174,6 +196,10 @@ function GameWorkspace(props: {
         onMove={session.play}
         onImport={props.onImport}
         onExport={props.onExport}
+        review={engine.reviewProgress()}
+        reviewError={engine.reviewError()}
+        onReview={() => void reviewGame()}
+        onCancelReview={engine.cancelReview}
       />
       <AnalysisPanel
         session={session}
