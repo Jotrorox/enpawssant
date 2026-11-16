@@ -1,16 +1,18 @@
 import { createSignal, For, Show } from "solid-js";
-import type { Arrow, Color } from "../chess/board";
+import type { Arrow, Color, Square } from "../chess/board";
 import type { MoveInput } from "../chess/rules";
 import { barLabel, formatScore, plotPawns, type Score, whiteShare } from "../chess/score";
 import { setSoundEnabled, soundEnabled } from "../chess/sound";
-import type { Game, GameMove } from "../data/mockGame";
+import type { GameInfo, Player } from "../game/session";
 import { Board } from "./Board";
 import {
   ChartIcon,
   CheckIcon,
   CopyIcon,
+  ExportIcon,
   FirstIcon,
   FlipIcon,
+  ImportIcon,
   LastIcon,
   NextIcon,
   PencilIcon,
@@ -21,24 +23,27 @@ import {
 import { Card, IconButton } from "./ui";
 
 type BoardPanelProps = {
-  game: Game;
+  info: GameInfo;
+  /** Index of the shown position in the current line; 0 is the starting position. */
   ply: number;
   maxPly: number;
   fen: string;
-  /** White-relative evaluation per ply, where the engine has one. */
+  /** White-relative evaluation per position of the current line, where one is known. */
   evals: (Score | undefined)[];
-  lastMove?: GameMove;
+  lastMove?: { from: Square; to: Square };
   arrows?: Arrow[];
   orientation: Color;
   onFlip: () => void;
   onPly: (ply: number) => void;
   onMove: (move: MoveInput) => void;
+  onImport: () => void;
+  onExport: () => void;
 };
 
 export function BoardPanel(props: BoardPanelProps) {
   return (
     <div class="flex min-h-0 min-w-0 flex-col pt-4 pb-3.5 pl-[18px]">
-      <GameHeader game={props.game} />
+      <GameHeader info={props.info} />
 
       <div class="flex min-h-0 flex-1 flex-col justify-center [container-type:size]">
         <div class="board-fit mx-auto flex gap-[18px]">
@@ -62,10 +67,12 @@ export function BoardPanel(props: BoardPanelProps) {
         fen={props.fen}
         onFlip={props.onFlip}
         onPly={props.onPly}
+        onImport={props.onImport}
+        onExport={props.onExport}
       />
 
       <EvalGraph
-        game={props.game}
+        info={props.info}
         evals={props.evals}
         ply={props.ply}
         maxPly={props.maxPly}
@@ -75,23 +82,36 @@ export function BoardPanel(props: BoardPanelProps) {
   );
 }
 
-function GameHeader(props: { game: Game }) {
+function GameHeader(props: { info: GameInfo }) {
   return (
-    <div class="mb-1 flex items-center gap-3">
+    <div class="mb-1 flex min-h-[30px] items-center gap-3">
       <h1 class="flex min-w-0 items-center gap-2 text-[15px] whitespace-nowrap">
         <span class="size-3 rounded-[3px] border-[1.5px] border-plum bg-white" aria-hidden="true" />
-        <span class="font-bold">{props.game.white.name}</span>
-        <span class="text-ink/75">{props.game.white.rating}</span>
+        <PlayerName player={props.info.white} />
         <span class="px-1 text-ink/60">vs</span>
         <span class="size-3 rounded-[3px] bg-plum" aria-hidden="true" />
-        <span class="font-bold">{props.game.black.name}</span>
-        <span class="text-ink/75">{props.game.black.rating}</span>
+        <PlayerName player={props.info.black} />
       </h1>
-      <div class="ml-auto flex shrink-0 items-center gap-2 rounded-xl border border-blush-200 bg-white px-2.5 py-1 text-[13px] font-bold">
-        <span class="font-mono text-rose-strong">{props.game.eco}</span>
-        <span>{props.game.opening}</span>
-      </div>
+      <Show when={props.info.eco || props.info.opening}>
+        <div class="ml-auto flex min-w-0 items-center gap-2 rounded-xl border border-blush-200 bg-white px-2.5 py-1 text-[13px] font-bold">
+          <Show when={props.info.eco}>
+            <span class="font-mono text-rose-strong">{props.info.eco}</span>
+          </Show>
+          <span class="truncate">{props.info.opening}</span>
+        </div>
+      </Show>
     </div>
+  );
+}
+
+function PlayerName(props: { player: Player }) {
+  return (
+    <>
+      <span class="truncate font-bold">{props.player.name}</span>
+      <Show when={props.player.rating}>
+        <span class="text-ink/75">{props.player.rating}</span>
+      </Show>
+    </>
   );
 }
 
@@ -129,6 +149,8 @@ function BoardToolbar(props: {
   fen: string;
   onFlip: () => void;
   onPly: (ply: number) => void;
+  onImport: () => void;
+  onExport: () => void;
 }) {
   const [copied, setCopied] = createSignal(false);
   let resetTimer: number | undefined;
@@ -156,6 +178,12 @@ function BoardToolbar(props: {
         <Show when={copied()} fallback={<CopyIcon />}>
           <CheckIcon class="size-5 text-nag-good" />
         </Show>
+      </IconButton>
+      <IconButton label="Import PGN" onClick={() => props.onImport()}>
+        <ImportIcon />
+      </IconButton>
+      <IconButton label="Export PGN" onClick={() => props.onExport()}>
+        <ExportIcon />
       </IconButton>
       <IconButton
         label={soundEnabled() ? "Mute move sounds" : "Unmute move sounds"}
@@ -213,7 +241,7 @@ function BoardToolbar(props: {
 }
 
 function EvalGraph(props: {
-  game: Game;
+  info: GameInfo;
   evals: (Score | undefined)[];
   ply: number;
   maxPly: number;
@@ -251,13 +279,19 @@ function EvalGraph(props: {
     <Card class="px-[18px] pt-2.5 pb-4">
       <div class="mb-2 flex items-center gap-2 text-[13px]">
         <h2 class="mr-1 font-display text-[15px] font-semibold">Eval graph</h2>
-        <span class="text-ink/70">Accuracy</span>
-        <span class="rounded-full bg-blush-100 px-2.5 py-px font-bold">
-          {props.game.white.name} {props.game.white.accuracy}
-        </span>
-        <span class="rounded-full bg-plum px-2.5 py-px font-bold text-white">
-          {props.game.black.name} {props.game.black.accuracy}
-        </span>
+        <Show when={props.info.accuracy}>
+          {(accuracy) => (
+            <>
+              <span class="text-ink/70">Accuracy</span>
+              <span class="rounded-full bg-blush-100 px-2.5 py-px font-bold">
+                {props.info.white.name} {accuracy().white}
+              </span>
+              <span class="rounded-full bg-plum px-2.5 py-px font-bold text-white">
+                {props.info.black.name} {accuracy().black}
+              </span>
+            </>
+          )}
+        </Show>
         <span class="ml-auto font-mono text-[12px] text-ink/75">
           ply {props.ply} / {props.maxPly}
         </span>

@@ -1,4 +1,5 @@
 mod engine;
+mod pgn;
 
 use engine::{Engine, EngineEvent, EngineInfo};
 use tauri::ipc::Channel;
@@ -34,11 +35,16 @@ async fn engine_stop(engine: State<'_, Engine>) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Engine::default())
         .invoke_handler(tauri::generate_handler![
             engine_info,
             engine_analyze,
-            engine_stop
+            engine_stop,
+            pgn::pgn_parse,
+            pgn::pgn_export,
+            pgn::pgn_open_file,
+            pgn::pgn_save_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

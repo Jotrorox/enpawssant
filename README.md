@@ -2,8 +2,9 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the board is fully playable and the bundled Stockfish analyses every position
-> live, but the sample game and the opening explorer are still placeholder data.
+> Early foundation: the board is fully playable, the bundled Stockfish analyses every position live
+> and games can be imported and exported as PGN, but the sample game and the opening explorer are
+> still placeholder data.
 
 ## The board
 
@@ -29,6 +30,27 @@ the arrows, depth and speed, and the eval graph for every ply analysed so far.
 Moving to another position stops the running search, waits for the engine to finish it and only
 then starts the new one, so stale lines never reach the board. Checkmate and stalemate are answered
 without asking the engine.
+
+## Games
+
+Each game tab holds a move tree (`src/chess/tree.ts`), so trying a different move never throws the
+game away: it becomes a variation.
+
+- Playing a move that differs from the next one in the game starts a variation; playing the same
+  move just follows the game. Variations can nest.
+- Click any move, including moves in variations, to jump to it. Arrow keys step through the current
+  line (stepping back and forward stays in a variation), ↑/↓ switch between alternatives to the
+  current move, and Home/End jump to the start or end of the line.
+- Right-click a move to make its line the main line or to delete it and everything after it.
+- **Import PGN** (board toolbar) reads pasted text or a `.pgn` file; each game opens in its own tab.
+  Files with several games show a picker. Variations, comments, NAGs and lichess-style
+  `[%eval]` scores are kept, and illegal moves are skipped with a warning. Imported scores fill
+  the eval bar and graph for positions the engine hasn't analysed yet.
+- **Export PGN** shows the game as PGN to copy or save, including variations, comments and NAGs.
+
+PGN parsing and writing happen in Rust (`crates/chess-core/src/pgn.rs`, built on `shakmaty` and
+`pgn-reader`). File dialogs are opened from Rust too, so the frontend needs no file system or dialog
+permissions.
 
 ## Prerequisites
 
@@ -70,23 +92,25 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 ├── mise.toml               # Node/pnpm versions and project tasks
 ├── biome.json              # TS/JSON lint + format config
 ├── crates/
-│   └── chess-core/         # Chess logic (shakmaty), independent of Tauri
+│   └── chess-core/         # Chess logic and PGN (shakmaty, pgn-reader), independent of Tauri
 ├── scripts/
 │   └── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 ├── src/                    # SolidJS + TypeScript frontend
 │   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
-│   └── chess/              # Board helpers, move rules, piece images, move sounds
+│   ├── chess/              # Board helpers, move rules, move tree, PGN types, piece images, sounds
+│   └── game/               # Game sessions: a tab's move tree, headers and current position
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
     │   ├── engine.rs       # Stockfish session: spawns it, runs searches, streams analysis
+    │   ├── pgn.rs          # PGN import/export commands and file dialogs
     │   └── lib.rs          # Tauri setup and commands
     └── tauri.conf.json
 ```
 
 The engine is only ever spawned from Rust; the frontend has no shell permissions and talks to the
-backend through the Tauri commands `engine_info`, `engine_analyze` and `engine_stop`.
+backend through Tauri commands such as `engine_analyze` and `pgn_parse`.
 
 ## License
 

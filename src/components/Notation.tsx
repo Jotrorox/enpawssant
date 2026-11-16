@@ -1,7 +1,21 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Switch,
+} from "solid-js";
 import { moveNumberPrefix } from "../chess/board";
+import { NAGS, type Nag, otherNagSymbols, qualityNag } from "../chess/nag";
+import { header } from "../chess/pgn";
 import { formatScore, type Score } from "../chess/score";
-import { type GameMove, NAGS, type Nag, type Variation } from "../data/mockGame";
+import { type GameTree, isMainline, type NodeId, variationCount } from "../chess/tree";
+import type { GameSession } from "../game/session";
+import { PromoteIcon, TrashIcon } from "./Icons";
 import { Card, CardTitle } from "./ui";
 
 const NAG_STYLES: Record<Nag, { text: string; label: string }> = {
@@ -10,57 +24,148 @@ const NAG_STYLES: Record<Nag, { text: string; label: string }> = {
   "!?": { text: "text-nag-interesting", label: "Interesting move" },
   "?!": { text: "text-nag-dubious", label: "Dubious move" },
   "?": { text: "text-nag-mistake", label: "Mistake" },
+  "??": { text: "text-nag-mistake", label: "Blunder" },
 };
 
-type Segment = { kind: "moves"; plies: number[] } | { kind: "variation"; variation: Variation };
+type Token =
+  | { kind: "move"; id: NodeId; prefix?: string }
+  | { kind: "comment"; text: string }
+  | { kind: "open" }
+  | { kind: "close" };
 
-/** Splits the mainline into runs of moves separated by variation blocks. */
-function segmentMainline(moves: GameMove[], variations: Variation[]): Segment[] {
-  const segments: Segment[] = [];
-  let run: number[] = [];
-  moves.forEach((_, index) => {
-    const ply = index + 1;
-    run.push(ply);
-    const branches = variations.filter((v) => v.ply === ply);
-    if (branches.length > 0) {
-      segments.push({ kind: "moves", plies: run });
-      for (const variation of branches) segments.push({ kind: "variation", variation });
-      run = [];
-    }
-  });
-  if (run.length > 0) segments.push({ kind: "moves", plies: run });
-  return segments;
+/** The main line is split into paragraphs around the variations that branch off it. */
+type Block = { kind: "main" | "variation"; tokens: Token[] };
+
+/** Comment text without embedded commands such as `[%clk 0:03:00]`. */
+function displayComment(comment: string | undefined): string | undefined {
+  return comment?.replace(/\[%[^\]]*\]/g, "").trim() || undefined;
 }
 
+/** Appends a move with its comments. Returns whether Black's next move needs a move number. */
+function pushMove(tree: GameTree, tokens: Token[], id: NodeId, forceNumber: boolean): boolean {
+  const node = tree.nodes[id];
+  const before = displayComment(node.startingComment);
+  if (before) tokens.push({ kind: "comment", text: before });
+  tokens.push({
+    kind: "move",
+    id,
+    prefix: moveNumberPrefix(node.ply - 1, forceNumber || !!before),
+  });
+  const after = displayComment(node.comment);
+  if (after) tokens.push({ kind: "comment", text: after });
+  return !!after;
+}
+
+/** A variation starting with `firstId`, with nested variations in parentheses. */
+function variationTokens(tree: GameTree, firstId: NodeId): Token[] {
+  const tokens: Token[] = [];
+  let forceNumber = pushMove(tree, tokens, firstId, true);
+  let node = tree.nodes[firstId];
+  while (node.children.length > 0) {
+    const [mainId, ...alternatives] = node.children;
+    forceNumber = pushMove(tree, tokens, mainId, forceNumber);
+    for (const id of alternatives) {
+      tokens.push({ kind: "open" }, ...variationTokens(tree, id), { kind: "close" });
+      forceNumber = true;
+    }
+    node = tree.nodes[mainId];
+  }
+  return tokens;
+}
+
+function layout(tree: GameTree): Block[] {
+  const blocks: Block[] = [];
+  let tokens: Token[] = [];
+  let forceNumber = true;
+  let node = tree.nodes[tree.rootId];
+  while (node.children.length > 0) {
+    const [mainId, ...alternatives] = node.children;
+    forceNumber = pushMove(tree, tokens, mainId, forceNumber);
+    if (alternatives.length > 0) {
+      blocks.push({ kind: "main", tokens });
+      for (const id of alternatives) {
+        blocks.push({ kind: "variation", tokens: variationTokens(tree, id) });
+      }
+      tokens = [];
+      forceNumber = true;
+    }
+    node = tree.nodes[mainId];
+  }
+  if (tokens.length > 0) blocks.push({ kind: "main", tokens });
+  return blocks;
+}
+
+type MenuState = { id: NodeId; x: number; y: number; trigger: HTMLElement };
+
 type NotationProps = {
-  moves: GameMove[];
-  variations: Variation[];
-  ply: number;
-  fen: string;
-  /** Evaluation of the current position, if the engine has one. */
+  session: GameSession;
+  /** Evaluation of the current position: the engine's, or the one the game was imported with. */
   score?: Score;
-  onPly: (ply: number) => void;
-  onToggleNag: (nag: Nag) => void;
 };
 
 export function Notation(props: NotationProps) {
-  const segments = createMemo(() => segmentMainline(props.moves, props.variations));
-  const currentNag = () => (props.ply > 0 ? props.moves[props.ply - 1].nag : undefined);
+  const session = () => props.session;
+  const tree = () => props.session.tree;
+  const blocks = createMemo(() => layout(tree()));
+  const variations = createMemo(() => variationCount(tree()));
+  const atRoot = () => session().currentId() === tree().rootId;
+  const currentNag = () => qualityNag(session().node().nags);
+  const result = () => {
+    const value = header({ headers: session().headers() }, "Result");
+    return value === "*" ? undefined : value;
+  };
+  const [menu, setMenu] = createSignal<MenuState>();
   let scroller: HTMLDivElement | undefined;
 
   // Keep the current move in view while stepping through the game.
   createEffect(() => {
-    const ply = props.ply;
-    scroller?.querySelector(`[data-ply="${ply}"]`)?.scrollIntoView({ block: "nearest" });
+    const id = session().currentId();
+    scroller?.querySelector(`[data-node="${id}"]`)?.scrollIntoView({ block: "nearest" });
   });
+
+  const openMenu = (event: MouseEvent, id: NodeId) => {
+    event.preventDefault();
+    const trigger = event.currentTarget as HTMLElement;
+    // Keyboard-opened menus (Shift+F10) report no pointer position.
+    const rect = trigger.getBoundingClientRect();
+    const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+    setMenu({
+      id,
+      x: fromKeyboard ? rect.left : event.clientX,
+      y: fromKeyboard ? rect.bottom : event.clientY,
+      trigger,
+    });
+  };
+
+  const renderToken = (token: Token) => (
+    <Switch>
+      <Match when={token.kind === "move" && token}>
+        {(move) => (
+          <MoveToken
+            session={session()}
+            id={move().id}
+            prefix={move().prefix}
+            score={props.score}
+            onMenu={(event) => openMenu(event, move().id)}
+          />
+        )}
+      </Match>
+      <Match when={token.kind === "comment" && token}>
+        {(comment) => <em class="selectable mr-1 text-[14px] text-ink/90">{comment().text} </em>}
+      </Match>
+      <Match when={token.kind === "open"}>(</Match>
+      <Match when={token.kind === "close"}>
+        <span class="mr-1">)</span>
+      </Match>
+    </Switch>
+  );
 
   return (
     <Card class="flex min-h-[180px] flex-1 flex-col px-[18px] pt-3 pb-3.5">
       <div class="mb-2 flex items-center gap-3">
         <CardTitle>Paw prints</CardTitle>
         <span class="text-[12px] text-muted">
-          Notation · {props.variations.length}{" "}
-          {props.variations.length === 1 ? "variation" : "variations"}
+          Notation · {variations()} {variations() === 1 ? "variation" : "variations"}
         </span>
         <fieldset class="ml-auto flex gap-1.5">
           <legend class="sr-only">Annotate current move</legend>
@@ -71,8 +176,8 @@ export function Notation(props: NotationProps) {
                 title={NAG_STYLES[nag].label}
                 aria-label={NAG_STYLES[nag].label}
                 aria-pressed={currentNag() === nag}
-                disabled={props.ply === 0}
-                onClick={() => props.onToggleNag(nag)}
+                disabled={atRoot()}
+                onClick={() => session().toggleNag(nag)}
                 class={`h-7 min-w-8 rounded-lg px-1.5 text-[13px] font-bold transition-colors disabled:opacity-40 ${
                   NAG_STYLES[nag].text
                 } ${
@@ -89,99 +194,174 @@ export function Notation(props: NotationProps) {
       </div>
 
       <div ref={scroller} class="min-h-0 flex-1 overflow-y-auto pr-1 text-[15px] leading-[2]">
-        <For each={segments()}>
-          {(segment, index) =>
-            segment.kind === "moves" ? (
-              <p>
-                <For each={segment.plies}>
-                  {(ply, i) => (
-                    <MainlineMove
-                      move={props.moves[ply - 1]}
-                      ply={ply}
-                      showBlackNumber={i() === 0 && index() > 0}
-                      current={ply === props.ply}
-                      score={ply === props.ply ? props.score : undefined}
-                      onSelect={() => props.onPly(ply)}
-                    />
-                  )}
-                </For>
-              </p>
-            ) : (
-              <VariationLine variation={segment.variation} />
-            )
+        <Show
+          when={blocks().length > 0}
+          fallback={
+            <p class="text-[13px] text-muted">
+              No paw prints yet. Play a move on the board or import a PGN.
+            </p>
           }
-        </For>
+        >
+          <For each={blocks()}>
+            {(block, index) =>
+              block.kind === "main" ? (
+                <p>
+                  <For each={block.tokens}>{renderToken}</For>
+                  <Show when={index() === blocks().length - 1 && result()}>
+                    <span class="ml-1 font-bold text-ink/75">{result()}</span>
+                  </Show>
+                </p>
+              ) : (
+                <p class="my-1 ml-1 border-l-2 border-rose/60 pl-4 text-[14px] leading-relaxed text-ink/85">
+                  <For each={block.tokens}>{renderToken}</For>
+                </p>
+              )
+            }
+          </For>
+          <Show when={blocks()[blocks().length - 1]?.kind === "variation" && result()}>
+            <p class="font-bold text-ink/75">{result()}</p>
+          </Show>
+        </Show>
       </div>
 
       <div class="mt-2 flex items-center gap-3 rounded-xl bg-blush-100/70 px-3.5 py-2 text-[12px]">
         <span class="font-bold text-ink/70">FEN</span>
-        <span class="selectable truncate font-mono text-ink">{props.fen}</span>
+        <span class="selectable truncate font-mono text-ink">{session().node().fen}</span>
       </div>
+
+      <Show when={menu()}>
+        {(state) => (
+          <MoveMenu
+            state={state()}
+            mainline={isMainline(tree(), state().id)}
+            onPromote={() => session().promote(state().id)}
+            onDelete={() => session().remove(state().id)}
+            onClose={() => setMenu(undefined)}
+          />
+        )}
+      </Show>
     </Card>
   );
 }
 
-function MainlineMove(props: {
-  move: GameMove;
-  ply: number;
-  showBlackNumber: boolean;
-  current: boolean;
+function MoveToken(props: {
+  session: GameSession;
+  id: NodeId;
+  prefix?: string;
+  /** Evaluation of the current position, shown after the move when it is the current one. */
   score?: Score;
-  onSelect: () => void;
+  onMenu: (event: MouseEvent) => void;
 }) {
-  const prefix = () => moveNumberPrefix(props.ply - 1, props.showBlackNumber);
-  const nagClass = () => (props.move.nag ? `${NAG_STYLES[props.move.nag].text} font-bold` : "");
+  const node = () => props.session.tree.nodes[props.id];
+  const current = () => props.session.currentId() === props.id;
+  const nag = () => qualityNag(node()?.nags ?? []);
 
   return (
-    <>
-      <Show when={prefix()}>
-        <span class="ml-1 text-ink/75 first:ml-0">{prefix()} </span>
-      </Show>
-      <button
-        type="button"
-        data-ply={props.ply}
-        aria-current={props.current ? "step" : undefined}
-        onClick={() => props.onSelect()}
-        class={`rounded-lg px-[3px] transition-colors ${
-          props.current ? "bg-blush-300 font-bold" : "hover:bg-blush-100"
-        } ${nagClass()}`}
-      >
-        {props.move.san}
-        {props.move.nag}
-      </button>
-      <Show when={props.score}>
-        {(score) => (
-          <span class="ml-1.5 font-mono text-[12px] text-ink/75">{formatScore(score())}</span>
-        )}
-      </Show>{" "}
-    </>
+    <Show when={node()}>
+      {(node) => (
+        <>
+          <Show when={props.prefix}>
+            <span class="text-ink/75">{props.prefix} </span>
+          </Show>
+          <button
+            type="button"
+            data-node={props.id}
+            aria-current={current() ? "step" : undefined}
+            onClick={() => props.session.goTo(props.id)}
+            onContextMenu={(event) => props.onMenu(event)}
+            class={`rounded-lg px-[3px] transition-colors ${
+              current() ? "bg-blush-300 font-bold" : "hover:bg-blush-100"
+            } ${nag() ? `${NAG_STYLES[nag() as Nag].text} font-bold` : ""}`}
+          >
+            {node().move?.san}
+            {nag()}
+            {otherNagSymbols(node().nags)}
+          </button>
+          <Show when={current() && props.score}>
+            {(score) => (
+              <span class="ml-1.5 font-mono text-[12px] text-ink/75">{formatScore(score())}</span>
+            )}
+          </Show>{" "}
+        </>
+      )}
+    </Show>
   );
 }
 
-function VariationLine(props: { variation: Variation }) {
+function MoveMenu(props: {
+  state: MenuState;
+  mainline: boolean;
+  onPromote: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  let menuEl!: HTMLDivElement;
+  const close = (restoreFocus: boolean) => {
+    props.onClose();
+    if (restoreFocus) props.state.trigger.focus();
+  };
+  const run = (action: () => void) => {
+    action();
+    close(false);
+  };
+
+  onMount(() => {
+    menuEl.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuEl.contains(event.target as Node)) close(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close(true);
+      }
+    };
+    const onScroll = () => close(false);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("blur", onScroll);
+    onCleanup(() => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("blur", onScroll);
+    });
+  });
+
+  const item =
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] font-semibold text-ink hover:bg-blush-100 focus-visible:bg-blush-100 disabled:opacity-40 disabled:hover:bg-transparent";
+
   return (
-    <p class="my-1 ml-1 border-l-2 border-rose/60 pl-4 text-[14px] leading-relaxed text-ink/85">
-      (
-      <For each={props.variation.moves}>
-        {(move, i) => {
-          const prefix = moveNumberPrefix(props.variation.ply - 1 + i(), i() === 0);
-          return (
-            <>
-              {i() > 0 ? " " : ""}
-              {prefix ? `${prefix} ` : ""}
-              <span class={move.nag ? `${NAG_STYLES[move.nag].text} font-bold` : ""}>
-                {move.san}
-                {move.nag}
-              </span>
-            </>
-          );
-        }}
-      </For>
-      )
-      <Show when={props.variation.comment}>
-        {" "}
-        <em class="text-ink/90">{props.variation.comment}</em>
-      </Show>
-    </p>
+    <div
+      ref={menuEl}
+      role="menu"
+      aria-label="Move actions"
+      class="fixed z-50 w-48 rounded-xl border border-blush-200 bg-white p-1 shadow-card"
+      style={{
+        left: `${Math.min(props.state.x, window.innerWidth - 200)}px`,
+        top: `${Math.min(props.state.y, window.innerHeight - 90)}px`,
+      }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        class={item}
+        disabled={props.mainline}
+        onClick={() => run(props.onPromote)}
+      >
+        <PromoteIcon class="size-4" />
+        Make main line
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class={`${item} text-rose-strong`}
+        onClick={() => run(props.onDelete)}
+      >
+        <TrashIcon class="size-4" />
+        Delete from here
+      </button>
+    </div>
   );
 }

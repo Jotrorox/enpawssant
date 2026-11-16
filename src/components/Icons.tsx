@@ -149,6 +149,32 @@ export const ChartIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const ImportIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5" />
+    <path d="M5 15v2a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-2" />
+  </Stroke>
+);
+
+export const ExportIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 15V4M7.5 8.5 12 4l4.5 4.5" />
+    <path d="M5 15v2a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-2" />
+  </Stroke>
+);
+
+export const PromoteIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" />
+  </Stroke>
+);
+
+export const TrashIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M4.5 7h15M9.5 7V5h5v2M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12" />
+  </Stroke>
+);
+
 /** Rounded cat head used for the logo and the coach avatar. */
 export function CatIcon(props: IconProps & { filled?: boolean }) {
   return (
