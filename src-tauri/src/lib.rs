@@ -1,7 +1,10 @@
 mod engine;
+mod explorer;
+mod lichess;
 mod pgn;
 
 use engine::{Engine, EngineEvent, EngineInfo};
+use lichess::Lichess;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, RunEvent, State};
 
@@ -37,6 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Engine::default())
+        .manage(Lichess::default())
         .invoke_handler(tauri::generate_handler![
             engine_info,
             engine_analyze,
@@ -45,6 +49,12 @@ pub fn run() {
             pgn::pgn_export,
             pgn::pgn_open_file,
             pgn::pgn_save_file,
+            explorer::explorer_moves,
+            explorer::opening_name,
+            explorer::lichess_account,
+            explorer::lichess_sign_in,
+            explorer::lichess_cancel_sign_in,
+            explorer::lichess_sign_out,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

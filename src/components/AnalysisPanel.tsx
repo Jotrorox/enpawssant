@@ -1,12 +1,31 @@
-import { createResource, createSignal, For, Match, type Resource, Show, Switch } from "solid-js";
-import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  type Resource,
+  Show,
+  Switch,
+} from "solid-js";
+import { fenPlyIndex, fenTurn, moveNumberPrefix, type PieceType } from "../chess/board";
 import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
+import {
+  createExplorer,
+  type ExplorerError,
+  type ExplorerResult,
+  type ExplorerState,
+  fetchOpeningName,
+  type ResultCounts,
+  resultShares,
+  totalGames,
+} from "../chess/explorer";
+import { cancelSignIn, lichessAccount, markSignedOut, signIn, signOut } from "../chess/lichess";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
-import { EXPLORER_FEN, type ExplorerRow, type ExplorerSource, explorer } from "../data/mockGame";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
 import { Notation } from "./Notation";
-import { Card, CardTitle, EmptyState, Segmented } from "./ui";
+import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
 
 type PanelTab = "analysis" | "database" | "annotate" | "info";
 
@@ -61,7 +80,7 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
           error={props.engineError}
           onToggle={props.onToggleEngine}
         />
-        <ExplorerCard hasData={fen() === EXPLORER_FEN} />
+        <ExplorerCard session={props.session} />
         <Notation session={props.session} score={props.score} />
       </Show>
     </div>
@@ -245,67 +264,273 @@ function coachSays(analysis: AnalysisUpdate): string {
 
 const EXPLORER_SOURCES = [
   { value: "masters", label: "Masters" },
-  { value: "online", label: "Online" },
+  { value: "lichess", label: "Lichess" },
   { value: "mine", label: "My games" },
 ] as const;
 
-function ExplorerCard(props: { hasData: boolean }) {
-  const [source, setSource] = createSignal<ExplorerSource>("masters");
-  // The placeholder data only covers the final position of the sample game.
-  const rows = () => (props.hasData ? explorer[source()] : []);
+type ExplorerTab = (typeof EXPLORER_SOURCES)[number]["value"];
+
+/** Rows visible before the move list scrolls, so the notation below keeps its room. */
+const EXPLORER_MAX_HEIGHT = "max-h-[214px]";
+
+function ExplorerCard(props: { session: GameSession }) {
+  const session = props.session;
+  const [tab, setTab] = createSignal<ExplorerTab>("masters");
+  const account = lichessAccount;
+  const explorer = createExplorer({
+    fen: () => session.node().fen,
+    source: () => (tab() === "lichess" ? "lichess" : "masters"),
+    enabled: () => tab() !== "mine" && account().status === "signedIn",
+    onSignedOut: markSignedOut,
+  });
+  const lineFens = () =>
+    session
+      .line()
+      .slice(0, session.index() + 1)
+      .map((id) => session.tree.nodes[id].fen);
+  const [opening] = createResource(lineFens, fetchOpeningName);
+  /** Moves already in the tree from here, highlighted in the list. */
+  const knownMoves = createMemo(
+    () => new Set(session.node().children.map((id) => session.tree.nodes[id].move?.uci)),
+  );
+  const play = (uci: string) =>
+    session.play({
+      from: uci.slice(0, 2),
+      to: uci.slice(2, 4),
+      promotion: (uci[4] as PieceType | undefined) || undefined,
+    });
 
   return (
     <Card class="shrink-0 px-[18px] pt-3 pb-3">
-      <div class="mb-1.5 flex items-center">
+      <div class="flex items-center gap-3">
         <CardTitle>Opening explorer</CardTitle>
         <Segmented
           size="sm"
           label="Explorer source"
           options={EXPLORER_SOURCES}
-          value={source()}
-          onChange={setSource}
+          value={tab()}
+          onChange={setTab}
           class="ml-auto border border-blush-200/80 bg-blush-50"
         />
       </div>
+      <p class="mt-0.5 mb-1.5 flex h-5 min-w-0 items-center gap-2 text-[13px]" aria-live="polite">
+        <Show
+          when={opening.latest}
+          fallback={<span class="text-muted">{opening.loading ? "" : "No named opening yet"}</span>}
+        >
+          {(named) => (
+            <>
+              <span class="font-mono font-bold text-rose-strong">{named().eco}</span>
+              <span class="truncate font-semibold" title={named().name}>
+                {named().name}
+              </span>
+            </>
+          )}
+        </Show>
+      </p>
 
-      <Show
-        when={rows().length > 0}
-        fallback={<EmptyState>No games reached this position yet.</EmptyState>}
-      >
-        <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
-          <thead>
-            <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
-              <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
-              <th class="w-[76px] py-1 text-right font-bold">Games</th>
-              <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={rows()}>
-              {(row, index) => <ExplorerRowView row={row} highlighted={index() === 0} />}
-            </For>
-          </tbody>
-        </table>
+      <Switch>
+        <Match when={tab() === "mine"}>
+          <EmptyState>
+            Your own games will show up here once EnPawssant keeps a game database.
+          </EmptyState>
+        </Match>
+        <Match when={account().status === "loading"}>
+          <EmptyState>Checking for your Lichess account…</EmptyState>
+        </Match>
+        <Match when={account().status === "signingIn"}>
+          <EmptyState class="gap-3">
+            <span>Approve EnPawssant on lichess.org in your browser, then come back here.</span>
+            <button type="button" class={SECONDARY_BUTTON} onClick={cancelSignIn}>
+              Cancel
+            </button>
+          </EmptyState>
+        </Match>
+        <Match when={account().status === "signedOut"}>
+          <SignInPrompt
+            error={(() => {
+              const state = account();
+              return state.status === "signedOut" ? state.error : undefined;
+            })()}
+          />
+        </Match>
+        <Match when={explorer.state()}>
+          {(state) => (
+            <ExplorerResults
+              state={state()}
+              knownMoves={knownMoves()}
+              onPlay={play}
+              onRetry={explorer.retry}
+            />
+          )}
+        </Match>
+      </Switch>
+
+      <Show when={tab() !== "mine" && signedInAs()}>
+        {(username) => (
+          <p class="mt-1.5 flex items-center justify-end gap-1.5 text-[12px] text-muted">
+            <span class="truncate">Lichess · {username()}</span>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="font-semibold underline-offset-2 hover:text-ink hover:underline"
+              onClick={() => void signOut()}
+            >
+              Sign out
+            </button>
+          </p>
+        )}
       </Show>
     </Card>
   );
 }
 
-function ExplorerRowView(props: { row: ExplorerRow; highlighted: boolean }) {
-  const cell = props.highlighted ? "bg-blush-100/80" : "";
+function signedInAs(): string | undefined {
+  const state = lichessAccount();
+  return state.status === "signedIn" ? state.account.username : undefined;
+}
+
+function SignInPrompt(props: { error?: string }) {
   return (
-    <tr class="group">
-      <td class={`rounded-l-xl py-1.5 pl-2.5 font-bold group-hover:bg-blush-100/60 ${cell}`}>
-        {props.row.move}
+    <EmptyState class="gap-3">
+      <span>
+        Lichess only shares its opening explorer with signed-in players. A free account is enough,
+        and EnPawssant can only read the explorer, never play or post as you.
+      </span>
+      <Show when={props.error}>
+        {(error) => <span class="text-error">Mochi couldn't sign you in: {error()}.</span>}
+      </Show>
+      <button type="button" class={PRIMARY_BUTTON} onClick={() => void signIn()}>
+        Sign in with Lichess
+      </button>
+    </EmptyState>
+  );
+}
+
+type ExplorerResultsProps = {
+  state: ExplorerState;
+  knownMoves: Set<string | undefined>;
+  onPlay: (uci: string) => void;
+  onRetry: () => void;
+};
+
+function ExplorerResults(props: ExplorerResultsProps) {
+  const result = (): ExplorerResult | undefined => {
+    const state = props.state;
+    if (state.status === "ready") return state.result;
+    if (state.status === "loading") return state.previous;
+    return undefined;
+  };
+  const error = () => (props.state.status === "error" ? props.state.error : undefined);
+
+  return (
+    <Switch>
+      <Match when={error()}>
+        {(error) => (
+          <EmptyState class="gap-3">
+            <span class={error().kind === "failed" ? "text-error" : ""}>
+              {explorerErrorMessage(error())}
+            </span>
+            <Show when={error().kind !== "signedOut"}>
+              <button type="button" class={SECONDARY_BUTTON} onClick={() => props.onRetry()}>
+                Try again
+              </button>
+            </Show>
+          </EmptyState>
+        )}
+      </Match>
+      <Match when={!result()}>
+        <EmptyState>Mochi is fetching the games…</EmptyState>
+      </Match>
+      <Match when={result()?.moves.length === 0}>
+        <EmptyState>No games reached this position yet.</EmptyState>
+      </Match>
+      <Match when={result()}>
+        {(result) => (
+          <div
+            class={`${EXPLORER_MAX_HEIGHT} overflow-y-auto transition-opacity ${
+              props.state.status === "loading" ? "opacity-50" : ""
+            }`}
+            aria-busy={props.state.status === "loading"}
+          >
+            <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
+              <thead class="sticky top-0 z-10 bg-white">
+                <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
+                  <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
+                  <th class="w-[76px] py-1 text-right font-bold">Games</th>
+                  <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={result().moves}>
+                  {(move) => (
+                    <ExplorerRowView
+                      label={move.san}
+                      counts={move}
+                      title={
+                        move.averageRating ? `Average rating ${move.averageRating}` : undefined
+                      }
+                      highlighted={props.knownMoves.has(move.uci)}
+                      onClick={() => props.onPlay(move.uci)}
+                    />
+                  )}
+                </For>
+                <ExplorerRowView label="Σ" counts={result()} title="All games" muted />
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Match>
+    </Switch>
+  );
+}
+
+function explorerErrorMessage(error: ExplorerError): string {
+  switch (error.kind) {
+    case "signedOut":
+      return "Lichess signed you out. Sign in again to keep exploring.";
+    case "rateLimited":
+      return "Lichess asked Mochi to slow down. Give it a minute, then try again.";
+    case "failed":
+      return `Mochi couldn't reach Lichess: ${error.message}.`;
+  }
+}
+
+type ExplorerRowProps = {
+  label: string;
+  counts: ResultCounts;
+  title?: string;
+  highlighted?: boolean;
+  /** The totals row is not clickable. */
+  muted?: boolean;
+  onClick?: () => void;
+};
+
+function ExplorerRowView(props: ExplorerRowProps) {
+  const shares = () => resultShares(props.counts);
+  const cell = () =>
+    `${props.highlighted ? "bg-blush-100/80" : ""} ${props.onClick ? "group-hover:bg-blush-100/60" : ""}`;
+  return (
+    <tr
+      class={`group ${props.onClick ? "cursor-pointer" : ""} ${props.muted ? "text-ink/70" : ""}`}
+      title={props.title}
+      onClick={() => props.onClick?.()}
+    >
+      <td class={`rounded-l-xl py-1.5 pl-2.5 font-bold ${cell()}`}>
+        <Show when={props.onClick} fallback={props.label}>
+          <button type="button" class="rounded-md font-bold" aria-label={`Play ${props.label}`}>
+            {props.label}
+          </button>
+        </Show>
       </td>
-      <td class={`py-1.5 text-right font-mono text-[13px] group-hover:bg-blush-100/60 ${cell}`}>
-        {props.row.games.toLocaleString("en-US")}
+      <td class={`py-1.5 text-right font-mono text-[13px] ${cell()}`}>
+        {totalGames(props.counts).toLocaleString("en-US")}
       </td>
-      <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 group-hover:bg-blush-100/60 ${cell}`}>
+      <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 ${cell()}`}>
         <div class="flex h-[22px] overflow-hidden rounded-full bg-white text-[11px] font-bold ring-1 ring-blush-200">
-          <ResultSegment percent={props.row.white} class="text-ink" />
-          <ResultSegment percent={props.row.draw} class="bg-plum-soft text-ink" />
-          <ResultSegment percent={props.row.black} class="bg-plum text-white" />
+          <ResultSegment percent={shares().white} class="text-ink" />
+          <ResultSegment percent={shares().draw} class="bg-plum-soft text-ink" />
+          <ResultSegment percent={shares().black} class="bg-plum text-white" />
         </div>
       </td>
     </tr>

@@ -10,12 +10,7 @@ import {
 } from "../chess/pgn";
 import { type GameSession, gameTitle } from "../game/session";
 import { CheckIcon, CloseIcon, CopyIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
-import { EmptyState, IconButton } from "./ui";
-
-const PRIMARY =
-  "flex h-9 items-center gap-2 rounded-xl bg-blush-400 px-4 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400";
-const SECONDARY =
-  "flex h-9 items-center gap-2 rounded-xl bg-blush-100 px-4 text-[14px] font-bold whitespace-nowrap text-ink transition-colors hover:bg-blush-200 disabled:opacity-50";
+import { EmptyState, IconButton, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./ui";
 
 /** Rejections from Tauri commands are plain strings; anything else is an unexpected error. */
 const errorMessage = (error: unknown) => (typeof error === "string" ? error : String(error));
@@ -132,7 +127,7 @@ export function ImportDialog(props: ImportDialogProps) {
             <div class="flex items-center gap-2">
               <button
                 type="button"
-                class={SECONDARY}
+                class={SECONDARY_BUTTON}
                 disabled={busy()}
                 onClick={() => run(openPgnFile)}
               >
@@ -141,7 +136,7 @@ export function ImportDialog(props: ImportDialogProps) {
               </button>
               <button
                 type="button"
-                class={`${PRIMARY} ml-auto`}
+                class={`${PRIMARY_BUTTON} ml-auto`}
                 disabled={busy() || text().trim() === ""}
                 onClick={() => run(() => parsePgn(text()))}
               >
@@ -183,7 +178,7 @@ function GamePicker(props: {
       <Show when={count() > 1 && count() <= MAX_OPEN_ALL}>
         <button
           type="button"
-          class={`${PRIMARY} self-end`}
+          class={`${PRIMARY_BUTTON} self-end`}
           onClick={() => props.onOpen(props.parsed.games)}
         >
           Open all {count()} games
@@ -213,7 +208,7 @@ function GameRow(props: { game: ImportedGame; onOpen: () => void }) {
           {(warning) => <p class="text-[12px] font-semibold text-nag-dubious">{warning}</p>}
         </For>
       </div>
-      <button type="button" class={SECONDARY} onClick={() => props.onOpen()}>
+      <button type="button" class={SECONDARY_BUTTON} onClick={() => props.onOpen()}>
         Open
       </button>
     </li>
@@ -294,11 +289,16 @@ export function ExportDialog(props: ExportDialogProps) {
             </p>
           )}
         </Show>
-        <button type="button" class={`${SECONDARY} ml-auto`} disabled={!pgn()} onClick={copy}>
+        <button
+          type="button"
+          class={`${SECONDARY_BUTTON} ml-auto`}
+          disabled={!pgn()}
+          onClick={copy}
+        >
           <CopyIcon class="size-[18px]" />
           Copy
         </button>
-        <button type="button" class={PRIMARY} disabled={!pgn()} onClick={save}>
+        <button type="button" class={PRIMARY_BUTTON} disabled={!pgn()} onClick={save}>
           <ExportIcon class="size-[18px]" />
           Save as…
         </button>
