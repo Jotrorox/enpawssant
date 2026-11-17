@@ -5,7 +5,9 @@
 //
 // Usage: node scripts/fetch-stockfish.mjs [--force] [--target <triple>]
 //   --force   re-download even if the binary already exists
-//   --target  Rust target triple to fetch for (defaults to `rustc -vV` host)
+//   --target  Rust target triple to fetch for (defaults to `rustc -vV` host).
+//             `universal-apple-darwin` fetches both macOS builds and merges them
+//             with `lipo`, keeping the per-arch binaries that tauri-build checks.
 //
 // Set GITHUB_TOKEN to avoid GitHub API rate limits (e.g. on CI).
 
@@ -151,14 +153,35 @@ function verify(binary) {
   return name;
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const host = hostTriple();
-  const triple = args.target ?? host;
-  const windowsBinary = triple.includes("windows");
-  const destination = join(BIN_DIR, `stockfish-${triple}${windowsBinary ? ".exe" : ""}`);
+const UNIVERSAL_MACOS = "universal-apple-darwin";
+const UNIVERSAL_PARTS = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
-  if (existsSync(destination) && !args.force) {
+const binaryPath = (triple) =>
+  join(BIN_DIR, `stockfish-${triple}${triple.includes("windows") ? ".exe" : ""}`);
+
+async function fetchUniversal(host, force) {
+  const destination = binaryPath(UNIVERSAL_MACOS);
+  if (existsSync(destination) && !force) {
+    console.log(`Stockfish already present at ${destination} (use --force to re-download).`);
+    return;
+  }
+  for (const part of UNIVERSAL_PARTS) await fetchEngine(part, host, force);
+  // Recent releases ship one fat macOS binary for both arches; older ones ship
+  // a build per arch that has to be merged.
+  const parts = UNIVERSAL_PARTS.map(binaryPath);
+  const archs = (file) => run("lipo", ["-archs", file]).trim().split(/\s+/);
+  const fat = parts.find((file) => ["arm64", "x86_64"].every((a) => archs(file).includes(a)));
+  if (fat) await copyFile(fat, destination);
+  else run("lipo", ["-create", "-output", destination, ...parts]);
+  await chmod(destination, 0o755);
+  console.log(`Installed ${destination}`);
+}
+
+async function fetchEngine(triple, host, force) {
+  const windowsBinary = triple.includes("windows");
+  const destination = binaryPath(triple);
+
+  if (existsSync(destination) && !force) {
     console.log(`Stockfish already present at ${destination} (use --force to re-download).`);
     return;
   }
@@ -187,6 +210,14 @@ async function main() {
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const host = hostTriple();
+  const triple = args.target ?? host;
+  if (triple === UNIVERSAL_MACOS) await fetchUniversal(host, args.force);
+  else await fetchEngine(triple, host, args.force);
 }
 
 main().catch((error) => {
