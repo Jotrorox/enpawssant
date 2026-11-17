@@ -643,6 +643,14 @@ function GameWorkspace(props: {
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={session.goToIndex}
         onMove={game ? (game.canMove() ? game.move : undefined) : session.play}
+        premove={
+          game && {
+            color: game.color(),
+            enabled: game.canPremove(),
+            current: game.premove(),
+            onSet: game.setPremove,
+          }
+        }
         onImport={props.onImport}
         onExport={props.onExport}
         onSaveToDatabase={props.onSaveToDatabase}

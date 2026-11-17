@@ -173,6 +173,40 @@ describe("games against the engine", () => {
     game.dispose();
   });
 
+  test("a premove is played as soon as the engine has answered", async () => {
+    replies = ["e7e5", "b8c6"];
+    const { game, moves, play } = setup({ color: "w", strength: { skill: 3 } });
+    play("e2e4");
+    expect(game.canPremove()).toBe(true);
+    game.setPremove({ from: "g1", to: "f3" });
+    expect(game.premove()).toEqual({ from: "g1", to: "f3" });
+    await settle();
+    expect(moves()).toEqual(["e2e4", "e7e5", "g1f3", "b8c6"]);
+    expect(game.premove()).toBeUndefined();
+  });
+
+  test("a premove that's illegal by then is dropped", async () => {
+    replies = ["d7d5"];
+    const { game, moves, play } = setup({ color: "w", strength: { skill: 3 } });
+    play("e2e4");
+    // e4xf5 needs a black piece on f5, and after ...d5 there is none.
+    game.setPremove({ from: "e4", to: "f5" });
+    await settle();
+    expect(moves()).toEqual(["e2e4", "d7d5"]);
+    expect(game.premove()).toBeUndefined();
+    expect(game.canMove()).toBe(true);
+  });
+
+  test("premoves wait for the opponent's turn and go when the user looks back", async () => {
+    const { session, game, play } = setup({ color: "w", strength: { skill: 3 } });
+    game.setPremove({ from: "e2", to: "e4" });
+    expect(game.premove()).toBeUndefined();
+    play("e2e4");
+    game.setPremove({ from: "g1", to: "f3" });
+    session.first();
+    expect(game.premove()).toBeUndefined();
+  });
+
   test("the engine isn't asked to move once the user mates it", async () => {
     replies = ["f2f3", "g2g4"];
     const { game, play } = setup({ color: "b", strength: { skill: 0 } });

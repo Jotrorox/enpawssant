@@ -168,6 +168,22 @@ describe("createOnlineGame", () => {
     expect(game.canMove()).toBe(false);
   });
 
+  test("plays a premove as soon as the opponent's move arrives", async () => {
+    const { game, moves } = setup();
+    emit?.(full("e2e4 e7e5"));
+    await settle();
+    game.move({ from: "g1", to: "f3" });
+    // Still waiting for Lichess to confirm, and already queueing the next move.
+    game.setPremove({ from: "f1", to: "c4" });
+    emit?.(state("e2e4 e7e5 g1f3"));
+    expect(game.premove()).toEqual({ from: "f1", to: "c4" });
+    emit?.(state("e2e4 e7e5 g1f3 b8c6"));
+    expect(moves()).toEqual(["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"]);
+    expect(game.premove()).toBeUndefined();
+    await settle();
+    expect(sentMoves).toEqual(["g1f3", "f1c4"]);
+  });
+
   test("takes a refused move back", async () => {
     const { game, moves } = setup();
     emit?.(full("e2e4 e7e5"));

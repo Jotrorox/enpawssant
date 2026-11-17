@@ -95,6 +95,15 @@ in progress, so close its tab to analyse other games between moves.
 You can step back through the moves during a game; the board takes your move again once you're
 back at the end. A game's result and time control go into the PGN headers.
 
+### Premoves
+
+While your opponent is thinking, against Stockfish or on Lichess, you can queue your next move: drag
+or click one of your pieces to wherever it might go once they've moved (your own pieces block,
+theirs don't, and pawns may always capture). The squares turn purple, and the move is played the
+instant it's your turn, if it's legal by then; otherwise it's dropped. Click elsewhere, right-click
+or press Escape to cancel it. Premoves promote to a queen. Lichess has no premoves in its Board API,
+so they live in the app and are sent like any other move.
+
 ### After the game
 
 **Analyse this game** appears on the play card once any game is over, against Stockfish or on

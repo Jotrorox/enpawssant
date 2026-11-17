@@ -24,6 +24,7 @@ import {
   start,
   type TimeControl,
 } from "./clock";
+import { createPremove } from "./played";
 import type { GameSession } from "./session";
 
 export type PlaySettings = {
@@ -192,6 +193,16 @@ export function createEngineGame(session: GameSession, settings: PlaySettings) {
       }
     };
 
+    const canMove = () =>
+      playing() && !error() && turn() === settings.color && session.currentId() === endId();
+    const canPremove = () =>
+      playing() && !error() && turn() === engineSide && session.currentId() === endId();
+    const move = (input: MoveInput) => {
+      if (!playing() || turn() !== settings.color || session.currentId() !== endId()) return;
+      playMove(settings.color, endId(), input, true);
+    };
+    const premoves = createPremove({ canMove, canPremove, move });
+
     const timer = setInterval(() => {
       const at = performance.now();
       setNow(at);
@@ -224,13 +235,12 @@ export function createEngineGame(session: GameSession, settings: PlaySettings) {
       /** The side whose clock is running. */
       clockRunning: () => clock()?.running,
       /** Whether the board should take the user's moves: on their turn, at the end of the game. */
-      canMove: () =>
-        playing() && !error() && turn() === settings.color && session.currentId() === endId(),
+      canMove,
       /** Plays the user's move at the end of the game. */
-      move: (input: MoveInput) => {
-        if (!playing() || turn() !== settings.color || session.currentId() !== endId()) return;
-        playMove(settings.color, endId(), input, true);
-      },
+      move,
+      canPremove,
+      premove: premoves.premove,
+      setPremove: premoves.setPremove,
       resign: () => finish(resignationOutcome(settings.color)),
       retry: () => {
         if (!error()) return;

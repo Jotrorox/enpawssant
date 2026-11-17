@@ -40,6 +40,13 @@ type BoardPanelProps = {
   onPly: (ply: number) => void;
   /** Without it the board takes no moves, e.g. while the engine is to move. */
   onMove?: (move: MoveInput) => void;
+  /** Premoves on the opponent's turn in a game being played. */
+  premove?: {
+    color: Color;
+    enabled: boolean;
+    current?: MoveInput;
+    onSet: (move?: MoveInput) => void;
+  };
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
@@ -71,6 +78,7 @@ export function BoardPanel(props: BoardPanelProps) {
               lastMove={props.lastMove}
               arrows={props.arrows}
               onMove={props.onMove}
+              premove={props.premove}
               sound={soundEnabled()}
             />
           </div>

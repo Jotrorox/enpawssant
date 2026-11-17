@@ -31,7 +31,7 @@ import { pgnTermination } from "../chess/outcome";
 import { mainline } from "../chess/review";
 import { type MoveInput, parseUciMove } from "../chess/rules";
 import { type ClockState, press, remaining } from "./clock";
-import { otherSide } from "./played";
+import { createPremove, otherSide } from "./played";
 import type { GameSession } from "./session";
 
 export type OnlineGame = ReturnType<typeof createOnlineGame>;
@@ -327,6 +327,10 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
       });
     };
 
+    const canPremove = () =>
+      !!full() && playing() && turn() !== color() && session.currentId() === endId();
+    const premoves = createPremove({ canMove, canPremove, move });
+
     const offers = (side: Color) => {
       const current = state();
       return {
@@ -383,6 +387,9 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
       confirming: () => pending() !== undefined,
       canMove,
       move,
+      canPremove,
+      premove: premoves.premove,
+      setPremove: premoves.setPremove,
       resign: () => void act("resign"),
       abort: () => void act("abort"),
       offerDraw: () => void act("drawYes"),
