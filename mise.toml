@@ -42,3 +42,8 @@ run = ["cargo fmt", "pnpm biome format --write ."]
 description = "Run the Rust and TypeScript test suites"
 depends = ["install", "fetch-engine"]
 run = ["cargo test --workspace", "pnpm test"]
+
+[tasks.release]
+description = "Bump the version everywhere, commit and tag v<version> (push stays manual)"
+usage = 'arg "<version>" help="New semver version without the v prefix, e.g. 0.2.0"'
+run = 'node scripts/release.mjs "${usage_version}"'
