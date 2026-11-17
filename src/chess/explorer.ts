@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { type Accessor, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import type { Color } from "./board";
 import { databaseVersion, exploreDatabase } from "./database";
 
 export type ExplorerSource = "masters" | "lichess" | "mine";
@@ -81,6 +82,8 @@ export function totalGames(counts: ResultCounts): number {
 export function createExplorer(options: {
   fen: Accessor<string>;
   source: Accessor<ExplorerSource>;
+  /** For "My games": only the games in which the user had this colour. */
+  side?: Accessor<Color | undefined>;
   enabled: Accessor<boolean>;
   /** Called when Lichess no longer accepts the account's token. */
   onSignedOut: () => void;
@@ -99,6 +102,7 @@ export function createExplorer(options: {
       return;
     }
     const local = source === "mine";
+    const side = local ? options.side?.() : undefined;
     if (local) databaseVersion();
     const key = `${source}:${positionKey(fen)}`;
     // The local database changes with every import, so its results are not cached.
@@ -119,7 +123,7 @@ export function createExplorer(options: {
     const timer = setTimeout(
       () => {
         const fetched = local
-          ? exploreDatabase(fen)
+          ? exploreDatabase(fen, side)
           : invoke<ExplorerResult>("explorer_moves", { source, fen });
         fetched
           .then((result) => {

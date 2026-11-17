@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   judgeMove,
+  opponentName,
   type PuzzleData,
+  playedMove,
   playUci,
   puzzleGame,
   solverSide,
@@ -93,4 +95,46 @@ it("names themes", () => {
   expect(themeLabel("discoveredAttack")).toBe("Discovered attack");
   expect(themeLabel("advancedPawn")).toBe("Advanced pawn");
   expect(themeLabel("middlegame")).toBe("Middlegame");
+});
+
+describe("puzzles from your own games", () => {
+  // A made-up blunder: after Black's Bxg3, White played Qh5?? instead of Re7.
+  const OWN: PuzzleData = {
+    ...PUZZLE,
+    id: "own-abc-48",
+    moves: ["f2g3", "e6e7"],
+    rating: 0,
+    themes: ["crushing", "oneMove"],
+    gameUrl: "",
+    origin: {
+      game: "ABC",
+      ply: 48,
+      played: "Qh5",
+      loss: 31.5,
+      white: "Mochi",
+      black: "Tofu",
+      date: "2026.05.06",
+      event: "Casual",
+    },
+  };
+
+  it("names the move played in the game and the opponent", () => {
+    expect(playedMove(OWN)).toBe("25.Qh5??");
+    expect(opponentName(OWN)).toBe("Tofu");
+    expect(playedMove(PUZZLE)).toBeUndefined();
+    const origin = OWN.origin as NonNullable<PuzzleData["origin"]>;
+    expect(opponentName({ ...OWN, origin: { ...origin, black: "" } })).toBe("your opponent");
+  });
+
+  it("opens with the players of the game", () => {
+    const game = puzzleGame(OWN);
+    expect(game.headers).toContainEqual(["White", "Mochi"]);
+    expect(game.headers).toContainEqual(["Annotator", "In the game: 25.Qh5??"]);
+    expect(game.moves.map((m) => m.uci)).toEqual(["f2g3", "e6e7"]);
+  });
+
+  it("labels their themes", () => {
+    expect(themeLabel("oneMove")).toBe("One move");
+    expect(themeLabel("equality")).toBe("Saves the game");
+  });
 });

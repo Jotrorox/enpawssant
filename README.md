@@ -4,8 +4,9 @@ A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, Solid
 
 > Early foundation: the board is fully playable, the bundled Stockfish (or any UCI engine) analyses
 > every position live, games can be imported and exported as PGN or fetched from Lichess and
-> Chess.com, kept in a local game database and explored by position, you can play against Stockfish with a clock, and there are puzzles from the
-> Lichess puzzle database.
+> Chess.com, kept in a local game database and explored by position, you can play against
+> Stockfish with a clock, and there are puzzles from the Lichess puzzle database and from your own
+> blunders.
 
 ## The board
 
@@ -133,6 +134,10 @@ with how often each was played and how those games ended.
 - Results are cached for the session, and requests wait until you stop stepping through moves.
   After Lichess rate limits the app, requests pause for a minute.
 - **My games** shows the same statistics for the games in your local database, no account needed.
+  Switch to **You as White** or **You as Black** to see how _you_ score from the position: only
+  your games with that colour count, and every move shows your score with it. Mochi asks for the
+  names you play under the first time (your Lichess username and the most frequent players in the
+  database are offered).
 
 ## Files
 
@@ -156,6 +161,9 @@ position" a single index lookup, and transpositions count as the same position.
   searched position for position searches.
 - The title-bar search box (⌘K / Ctrl K) searches the database; a FEN searches by position.
 - Games without an `Opening` tag are named from the opening tables.
+- **Your names** (e.g. your Lichess and chess.com usernames) tell Mochi which games are yours:
+  **Only my games** filters the search to them, and the explorer and Purrzles use them too. Names
+  match without regard to case.
 
 ## Engines
 
@@ -185,9 +193,19 @@ fetches the full database (about 300 MB) and keeps the well-liked, often played 
   Wrong moves can be retried but count as a miss, as do hints (first the piece, then the move) and
   the solution. Filter by theme, such as forks or mate in 2.
 - **Streak**: puzzles get harder with every solve; one mistake ends the run. Your best run is kept.
+- **My blunders**: puzzles from your own games. **Find my blunders** runs your analysis engine over
+  every game of yours in the database that it hasn't checked yet, as a separate background process
+  with half the cores, so live analysis carries on. A move that gives away 15 percentage points of
+  winning chances (a `??` in the game review) becomes a puzzle when the engine's better move was
+  clearly the only good one. The solution continues for up to three moves while each next move is
+  just as clearly the only good one. You get the opponent's move from the game, then find what you
+  missed. These puzzles are unrated: new ones come first, then the ones you missed last time.
+  **Open the game** shows the game at that point. The search can be stopped at any time, and it
+  keeps what it found and picks up where it stopped.
 - Any checkmate counts as the final move of a mating puzzle. **Analyze on the board** opens the
   puzzle and its solution in a tab.
-- Progress lives in `puzzles.sqlite` in the app data folder; **Reset progress** forgets it.
+- Progress lives in `puzzles.sqlite` in the app data folder; **Reset progress** forgets it, and
+  **Forget them** drops the puzzles from your games so they can be searched for again.
 
 ## Prerequisites
 
@@ -281,6 +299,7 @@ notarization enabled, both the app and the `.dmg` are notarized and stapled. See
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
+    │   ├── blunders.rs     # Puzzles from your blunders: searches your games with a background engine
     │   ├── database.rs     # Game database: import, search, position index, "My games" explorer
     │   ├── engine.rs       # UCI engine sessions: analysis engines and the opponent you play against
     │   ├── engines.rs      # Engine setup: added engines, options, analysis roles
@@ -289,7 +308,7 @@ notarization enabled, both the app and the `.dmg` are notarized and stapled. See
     │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
     │   ├── online.rs       # Fetching a player's games from Lichess and Chess.com
     │   ├── pgn.rs          # PGN import/export commands and file dialogs
-    │   ├── puzzles.rs      # Puzzles: starter pack, rating, streaks, full database download
+    │   ├── puzzles.rs      # Puzzles: starter pack, rating, streaks, full database download, your own
     │   ├── store.rs        # SQLite files in the app data folder
     │   └── lib.rs          # Tauri setup and commands
     └── tauri.conf.json

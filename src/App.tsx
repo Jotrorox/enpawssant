@@ -334,6 +334,7 @@ export default function App() {
                 onAnalyze={(game, position) =>
                   openTabs([createTab(game, gameTitle(game), position)])
                 }
+                onOpenGame={(id, ply) => void openFromDatabase(id, ply)}
                 notify={notify}
               />
             </Match>
