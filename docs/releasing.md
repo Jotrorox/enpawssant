@@ -43,11 +43,11 @@ One or two sentences on what's new.
 
 ## Downloads
 
-| Platform                        | File                                                                   |
-| ------------------------------- | ---------------------------------------------------------------------- |
-| macOS (Apple silicon and Intel) | `EnPawssant_X.Y.Z_universal.dmg`                                       |
-| Windows x64                     | `EnPawssant_X.Y.Z_x64-setup.exe` or `EnPawssant_X.Y.Z_x64_en-US.msi`   |
-| Linux x64                       | `EnPawssant_X.Y.Z_amd64.AppImage` or `EnPawssant_X.Y.Z_amd64.deb`      |
+| Platform                        | File                                                                 |
+| ------------------------------- | -------------------------------------------------------------------- |
+| macOS (Apple silicon and Intel) | `EnPawssant_X.Y.Z_universal.dmg`                                     |
+| Windows x64                     | `EnPawssant_X.Y.Z_x64-setup.exe` or `EnPawssant_X.Y.Z_x64_en-US.msi` |
+| Linux x64                       | `EnPawssant_X.Y.Z_amd64.AppImage` or `EnPawssant_X.Y.Z_amd64.deb`    |
 
 Already installed? EnPawssant offers the update itself at launch, or go to Settings → Updates.
 
