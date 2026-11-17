@@ -32,14 +32,14 @@ export function winLoss(before: Score, after: Score, mover: Color): number {
 }
 
 /** Losses of winning chances, in percentage points, that make a move an inaccuracy and worse. */
-const JUDGEMENTS: [minLoss: number, nag: Nag][] = [
+const JUDGEMENTS: [minLoss: number, nag: ReviewNag][] = [
   [15, "??"],
   [10, "?"],
   [5, "?!"],
 ];
 
 /** `??`, `?` or `?!` for a blunder, mistake or inaccuracy by `mover`; nothing for a fine move. */
-export function judgeMove(before: Score, after: Score, mover: Color): Nag | undefined {
+export function judgeMove(before: Score, after: Score, mover: Color): ReviewNag | undefined {
   const loss = winLoss(before, after, mover);
   return JUDGEMENTS.find(([minLoss]) => loss >= minLoss)?.[1];
 }
@@ -125,26 +125,71 @@ export function mainlineAccuracy(tree: GameTree): Accuracy | undefined {
   return gameAccuracy(scores, fenTurn(tree.nodes[tree.rootId].fen));
 }
 
+/** What a game review found for one position. */
+export type ReviewedPosition = {
+  /** White-relative; a result for positions without legal moves. */
+  score: Score;
+  /** How deep the engine searched. */
+  depth: number;
+  /** The engine's best move there, in UCI. */
+  bestMove?: string;
+};
+
 /**
- * Writes an engine review into the tree (use inside `produce`): stores `scores` as the
- * evaluations of their nodes and marks main-line inaccuracies, mistakes and blunders with NAGs.
- * Moves that already carry a move-quality annotation keep it, so a reviewer's own `!` or `?`
- * survives and running the review again changes nothing.
+ * A node's evaluation if the engine searched it at least `depth` deep, or its result when the game
+ * is over there. Only a line's last position can be over, so others skip the legality check.
  */
-export function applyReview(tree: GameTree, scores: ReadonlyMap<NodeId, Score>) {
-  for (const [id, score] of scores) {
-    const node = tree.nodes[id];
-    // PGN `[%eval]` has no way to say "checkmate"; the position itself does.
-    if (node && !("result" in score)) node.eval = score;
-  }
+export function reviewedScore(node: MoveNode, depth: number): Score | undefined {
+  if (node.eval && (node.evalDepth ?? 0) >= depth) return node.eval;
+  return node.children.length === 0 ? finalScore(node.fen) : undefined;
+}
+
+/** How many main-line positions a review to `depth` has covered, out of all of them. */
+export function reviewCoverage(tree: GameTree, depth: number): { done: number; total: number } {
   const ids = mainline(tree);
-  for (let i = 1; i < ids.length; i++) {
-    const parent = tree.nodes[ids[i - 1]];
-    const node = tree.nodes[ids[i]];
-    const before = scores.get(parent.id) ?? storedScore(parent);
-    const after = scores.get(node.id) ?? storedScore(node);
-    if (!before || !after || qualityNag(node.nags)) continue;
-    const nag = judgeMove(before, after, fenTurn(parent.fen));
-    if (nag) node.nags = [NAG_CODES[nag], ...node.nags];
+  const done = ids.filter((id) => reviewedScore(tree.nodes[id], depth) !== undefined).length;
+  return { done, total: ids.length };
+}
+
+/**
+ * Writes what a review found for one position into the tree (use inside `produce`), then judges
+ * the moves into and out of it once the positions on both sides have been reviewed to `depth`:
+ * inaccuracies, mistakes and blunders get a NAG. Moves that already carry a move-quality
+ * annotation keep it, so a reviewer's own `!` or `?` survives and reviewing again changes nothing.
+ *
+ * Results are recorded as they come in, so a review that is stopped keeps what it found and can
+ * pick up where it left off.
+ */
+export function recordReview(tree: GameTree, id: NodeId, result: ReviewedPosition, depth: number) {
+  const node = tree.nodes[id];
+  if (!node) return;
+  // PGN `[%eval]` has no way to say "checkmate"; the position itself does.
+  if (!("result" in result.score)) {
+    node.eval = result.score;
+    node.evalDepth = result.depth;
+    node.bestMove = result.bestMove;
   }
+  if (node.parent !== undefined) judge(tree.nodes[node.parent], node, depth);
+  const next = node.children[0];
+  if (next !== undefined) judge(node, tree.nodes[next], depth);
+}
+
+function judge(parent: MoveNode, node: MoveNode, depth: number) {
+  if (qualityNag(node.nags)) return;
+  const before = reviewedScore(parent, depth);
+  const after = reviewedScore(node, depth);
+  if (!before || !after) return;
+  const nag = judgeMove(before, after, fenTurn(parent.fen));
+  if (nag) node.nags = [NAG_CODES[nag], ...node.nags];
+}
+
+/** The judgements a review hands out: inaccuracy, mistake and blunder. */
+export type ReviewNag = "?!" | "?" | "??";
+
+const REVIEW_NAGS: readonly Nag[] = ["?!", "?", "??"] satisfies ReviewNag[];
+
+/** The move-quality annotation among `nags`, if it is one a review hands out. */
+export function reviewNag(nags: readonly number[]): ReviewNag | undefined {
+  const nag = qualityNag(nags);
+  return nag && REVIEW_NAGS.includes(nag) ? (nag as ReviewNag) : undefined;
 }
