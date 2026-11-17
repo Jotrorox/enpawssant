@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use url::Url;
 
-const LICHESS: &str = "https://lichess.org";
+pub(crate) const LICHESS: &str = "https://lichess.org";
 /// Lichess does not register public clients; the ID is shown on its consent page.
 const CLIENT_ID: &str = "enpawssant";
 const KEYRING_SERVICE: &str = "com.jotrorox.enpawssant";
@@ -87,6 +87,8 @@ pub enum RequestError {
     SignedOut,
     /// Lichess asked us to slow down; requests resume after a minute.
     RateLimited,
+    /// There is nothing at that address, e.g. no player with that name.
+    NotFound,
     Failed {
         message: String,
     },
@@ -119,13 +121,17 @@ const USER_AGENT: &str = concat!(
     " (+https://github.com/Jotrorox/enpawssant)"
 );
 
+/// An HTTP client that names the app, for Lichess and Chess.com.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("the HTTP client configuration is valid")
+}
+
 impl Default for Lichess {
     fn default() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("the HTTP client configuration is valid");
         let stream_http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(REQUEST_TIMEOUT)
@@ -133,7 +139,7 @@ impl Default for Lichess {
             .build()
             .expect("the HTTP client configuration is valid");
         Lichess {
-            http,
+            http: http_client(),
             stream_http,
             account: Mutex::new(None),
             request_lock: tokio::sync::Mutex::new(()),
@@ -262,23 +268,86 @@ impl Lichess {
         url: &str,
         query: &[(&str, String)],
     ) -> Result<T, RequestError> {
-        let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
-        let _turn = self.request_lock.lock().await;
-        self.ensure_not_paused()?;
+        let body = self
+            .get(url, query, "application/json", REQUEST_TIMEOUT, true)
+            .await?;
+        serde_json::from_str(&body).map_err(RequestError::failed)
+    }
 
-        let response = self
-            .http
-            .get(url)
-            .query(query)
-            .bearer_auth(&stored.token)
-            .send()
-            .await
-            .map_err(|e| RequestError::failed(without_url(e)))?;
-        self.check(response, true)
-            .await?
-            .json()
-            .await
-            .map_err(|e| RequestError::failed(without_url(e)))
+    /// Sends a GET request that also works signed out and returns the response as text. Signed
+    /// in, the request uses the account's token, which Lichess serves faster.
+    pub async fn get_public_text(
+        &self,
+        url: &str,
+        query: &[(&str, String)],
+        accept: &str,
+        timeout: Duration,
+    ) -> Result<String, RequestError> {
+        self.get(url, query, accept, timeout, false).await
+    }
+
+    async fn get(
+        &self,
+        url: &str,
+        query: &[(&str, String)],
+        accept: &str,
+        timeout: Duration,
+        needs_account: bool,
+    ) -> Result<String, RequestError> {
+        let mut stored = self.stored().await;
+        if needs_account && stored.is_none() {
+            return Err(RequestError::SignedOut);
+        }
+        let _turn = self.request_lock.lock().await;
+        loop {
+            if self
+                .paused_until
+                .lock()
+                .unwrap()
+                .is_some_and(|until| Instant::now() < until)
+            {
+                return Err(RequestError::RateLimited);
+            }
+
+            let mut request = self
+                .http
+                .get(url)
+                .query(query)
+                .header(reqwest::header::ACCEPT, accept)
+                .timeout(timeout);
+            if let Some(stored) = &stored {
+                request = request.bearer_auth(&stored.token);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|e| RequestError::failed(without_url(e)))?;
+            return match response.status() {
+                StatusCode::UNAUTHORIZED if stored.is_some() => {
+                    // The token was revoked or has expired; it is of no further use.
+                    self.set_account(None);
+                    let _ = tokio::task::spawn_blocking(delete_account).await;
+                    if needs_account {
+                        Err(RequestError::SignedOut)
+                    } else {
+                        stored = None;
+                        continue;
+                    }
+                }
+                StatusCode::TOO_MANY_REQUESTS => {
+                    *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                    Err(RequestError::RateLimited)
+                }
+                StatusCode::NOT_FOUND => Err(RequestError::NotFound),
+                status if !status.is_success() => {
+                    Err(RequestError::failed(format!("Lichess answered {status}")))
+                }
+                _ => response
+                    .text()
+                    .await
+                    .map_err(|e| RequestError::failed(without_url(e))),
+            };
+        }
     }
 
     /// Sends an authenticated request to lichess.org (`path` starts with `/`)
@@ -349,18 +418,6 @@ impl Lichess {
                 on_line(line);
             }
         }
-    }
-
-    fn ensure_not_paused(&self) -> Result<(), RequestError> {
-        if self
-            .paused_until
-            .lock()
-            .unwrap()
-            .is_some_and(|until| Instant::now() < until)
-        {
-            return Err(RequestError::RateLimited);
-        }
-        Ok(())
     }
 
     /// Turns error statuses into `RequestError`s, with Lichess's own message
@@ -496,7 +553,7 @@ fn error_message(body: &str) -> Option<String> {
 }
 
 /// Describes a request error without its URL, which can be long and holds the query.
-fn without_url(error: reqwest::Error) -> String {
+pub(crate) fn without_url(error: reqwest::Error) -> String {
     error.without_url().to_string()
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { sampleGame } from "../data/mockGame";
+import { sampleGame } from "../test/sampleGame";
 import { toggleQualityNag } from "./nag";
 import { type MoveInput, makeMove } from "./rules";
 import {

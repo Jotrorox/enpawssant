@@ -1,6 +1,7 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Index, Show } from "solid-js";
 import type { Arrow, Color, Square } from "../chess/board";
 import type { ReviewProgress } from "../chess/engine";
+import type { ReviewNag } from "../chess/review";
 import type { MoveInput } from "../chess/rules";
 import { barLabel, formatScore, plotPawns, type Score, whiteShare } from "../chess/score";
 import { setSoundEnabled, soundEnabled } from "../chess/sound";
@@ -53,6 +54,10 @@ type BoardPanelProps = {
   onPlay: () => void;
   /** Progress of the running full-game analysis, if one is running. */
   review?: ReviewProgress;
+  /** How many main-line positions earlier analyses covered, out of all of them. */
+  reviewed: ReviewProgress;
+  /** The review judgement (`?!`, `?`, `??`) of each move of the current line, by position. */
+  judgements: (ReviewNag | undefined)[];
   reviewError?: string;
   /** A game is in progress somewhere: full-game analysis, Copy FEN and Export PGN are off. */
   fairPlay?: boolean;
@@ -96,6 +101,7 @@ export function BoardPanel(props: BoardPanelProps) {
         onSaveToDatabase={props.onSaveToDatabase}
         onPlay={props.onPlay}
         review={props.review}
+        reviewed={props.reviewed}
         fairPlay={props.fairPlay}
         onReview={props.onReview}
         onCancelReview={props.onCancelReview}
@@ -105,6 +111,7 @@ export function BoardPanel(props: BoardPanelProps) {
         info={props.info}
         reviewError={props.reviewError}
         evals={props.evals}
+        judgements={props.judgements}
         ply={props.ply}
         maxPly={props.maxPly}
         onPly={props.onPly}
@@ -185,11 +192,23 @@ function BoardToolbar(props: {
   onSaveToDatabase: () => void;
   onPlay: () => void;
   review?: ReviewProgress;
+  reviewed: ReviewProgress;
   fairPlay?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 }) {
   const [copied, setCopied] = createSignal(false);
+  const noMoves = () => props.reviewed.total < 2;
+  const analyzed = () => !noMoves() && props.reviewed.done === props.reviewed.total;
+  const resumable = () => props.reviewed.done > 0 && !analyzed();
+  const reviewTitle = () => {
+    if (props.fairPlay) return FAIR_PLAY_OFF;
+    if (noMoves()) return "Play or import some moves first";
+    if (analyzed()) return "Every position of the main line is analyzed";
+    if (resumable())
+      return `${props.reviewed.done} of ${props.reviewed.total} positions analyzed so far`;
+    return undefined;
+  };
   let resetTimer: number | undefined;
 
   const copyFen = async () => {
@@ -227,7 +246,7 @@ function BoardToolbar(props: {
           <CheckIcon class="size-5 text-nag-good" />
         </Show>
       </IconButton>
-      <IconButton label="Import PGN" onClick={() => props.onImport()}>
+      <IconButton label="Import games" onClick={() => props.onImport()}>
         <ImportIcon />
       </IconButton>
       <IconButton
@@ -293,12 +312,14 @@ function BoardToolbar(props: {
           <button
             type="button"
             onClick={() => props.onReview()}
-            disabled={props.fairPlay}
-            title={props.fairPlay ? FAIR_PLAY_OFF : undefined}
+            disabled={props.fairPlay || noMoves() || analyzed()}
+            title={reviewTitle()}
             class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400"
           >
-            <ChartIcon class="size-[18px]" />
-            Analyze full game
+            <Show when={analyzed()} fallback={<ChartIcon class="size-[18px]" />}>
+              <CheckIcon class="size-[18px]" />
+            </Show>
+            {analyzed() ? "Game analyzed" : resumable() ? "Resume analysis" : "Analyze full game"}
           </button>
         }
       >
@@ -330,6 +351,7 @@ function EvalGraph(props: {
   info: GameInfo;
   reviewError?: string;
   evals: (Score | undefined)[];
+  judgements: (ReviewNag | undefined)[];
   ply: number;
   maxPly: number;
   onPly: (ply: number) => void;
@@ -442,6 +464,22 @@ function EvalGraph(props: {
             vector-effect="non-scaling-stroke"
           />
         </svg>
+        <Index each={props.judgements}>
+          {(nag, ply) => (
+            <Show when={nag()}>
+              {(nag) => (
+                <span
+                  title={JUDGEMENT_MARKS[nag()].label}
+                  class={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-[1.5px] border-white ${JUDGEMENT_MARKS[nag()].class}`}
+                  style={{
+                    left: `${x(ply)}%`,
+                    top: `${((props.evals[ply] ? y(props.evals[ply] as Score) : MID) / HEIGHT) * 100}%`,
+                  }}
+                />
+              )}
+            </Show>
+          )}
+        </Index>
         <Show when={current()}>
           {(score) => (
             <span
@@ -457,3 +495,10 @@ function EvalGraph(props: {
     </Card>
   );
 }
+
+/** How the eval graph marks the moves a review judged. */
+const JUDGEMENT_MARKS: Record<ReviewNag, { label: string; class: string }> = {
+  "?!": { label: "Inaccuracy", class: "size-2 bg-nag-dubious" },
+  "?": { label: "Mistake", class: "size-2.5 bg-nag-mistake" },
+  "??": { label: "Blunder", class: "size-3 bg-nag-mistake" },
+};

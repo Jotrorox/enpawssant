@@ -1,18 +1,20 @@
 import { describe, expect, test } from "vitest";
-import { sampleGame } from "../data/mockGame";
+import { sampleGame } from "../test/sampleGame";
 import { NAG_CODES } from "./nag";
 import {
-  applyReview,
   finalScore,
   gameAccuracy,
   judgeMove,
   mainline,
   mainlineAccuracy,
   moveAccuracy,
+  recordReview,
+  reviewCoverage,
+  reviewNag,
   winPercent,
 } from "./review";
 import type { Score } from "./score";
-import { type NodeId, treeFromPgn } from "./tree";
+import { type GameTree, type NodeId, treeFromPgn } from "./tree";
 
 const cp = (value: number): Score => ({ cp: value });
 
@@ -94,53 +96,91 @@ describe("final positions", () => {
   });
 });
 
-describe("applying a review", () => {
+describe("recording a review", () => {
+  const DEPTH = 16;
   // Root, e4, e5, Nf3, Nc6, Bc4, Bc5!, c3, Nf6.
+  const VALUES = [20, 30, 30, 30, 100, 100, 100, -300, -300];
+  const record = (tree: GameTree, ids: NodeId[], indices: number[], depth = DEPTH) => {
+    for (const i of indices) {
+      recordReview(tree, ids[i], { score: cp(VALUES[i]), depth, bestMove: "a2a3" }, DEPTH);
+    }
+  };
   const reviewed = () => {
     const tree = treeFromPgn(sampleGame);
     const ids = mainline(tree);
-    const values = [20, 30, 30, 30, 100, 100, 100, -300, -300];
-    const scores = new Map<NodeId, Score>(ids.map((id, i) => [id, cp(values[i])]));
-    applyReview(tree, scores);
+    record(
+      tree,
+      ids,
+      ids.map((_, i) => i),
+    );
     return { tree, ids };
   };
 
-  test("stores evaluations and marks weak moves", () => {
+  test("stores evaluations, depths and best moves, and marks weak moves", () => {
     const { tree, ids } = reviewed();
     const nags = ids.map((id) => tree.nodes[id].nags);
-    expect(tree.nodes[ids[4]].eval).toEqual(cp(100));
+    expect(tree.nodes[ids[4]]).toMatchObject({ eval: cp(100), evalDepth: DEPTH, bestMove: "a2a3" });
     expect(nags[4]).toEqual([NAG_CODES["?!"]]);
     expect(nags[7]).toEqual([NAG_CODES["??"]]);
     expect(nags[8]).toEqual([]);
+    expect(reviewNag(nags[7])).toBe("??");
   });
 
   test("keeps existing move-quality annotations and is idempotent", () => {
     const { tree, ids } = reviewed();
     // Bc5 was annotated "!" in the PGN.
     expect(tree.nodes[ids[6]].nags).toEqual([NAG_CODES["!"]]);
+    expect(reviewNag(tree.nodes[ids[6]].nags)).toBeUndefined();
     const before = JSON.stringify(tree);
-    applyReview(tree, new Map());
+    record(
+      tree,
+      ids,
+      ids.map((_, i) => i),
+    );
     expect(JSON.stringify(tree)).toBe(before);
+  });
+
+  test("judges a move only once both of its positions are reviewed deep enough", () => {
+    const tree = treeFromPgn(sampleGame);
+    const ids = mainline(tree);
+    record(tree, ids, [7]);
+    expect(tree.nodes[ids[7]].nags).toEqual([]);
+    // A shallow or imported evaluation of the position before doesn't count.
+    record(tree, ids, [6], DEPTH - 1);
+    expect(tree.nodes[ids[7]].nags).toEqual([]);
+    // Recorded out of order, the move after is judged too.
+    record(tree, ids, [6, 8]);
+    expect(tree.nodes[ids[7]].nags).toEqual([NAG_CODES["??"]]);
+    expect(reviewCoverage(tree, DEPTH)).toEqual({ done: 3, total: 9 });
   });
 
   test("leaves variations alone and makes accuracy available", () => {
     const { tree, ids } = reviewed();
     const variation = tree.nodes[ids[5]].children[1];
     expect(tree.nodes[variation].eval).toBeUndefined();
+    expect(reviewCoverage(tree, DEPTH)).toEqual({ done: 9, total: 9 });
     const accuracy = mainlineAccuracy(tree);
     expect(accuracy?.white).toBeLessThan(accuracy?.black ?? 0);
   });
 
-  test("never writes a game result as an evaluation", () => {
-    const tree = treeFromPgn({ ...sampleGame, moves: sampleGame.moves.slice(0, 1) });
-    const [root, e4] = mainline(tree);
-    applyReview(
-      tree,
-      new Map<NodeId, Score>([
-        [root, cp(20)],
-        [e4, { result: "1-0" }],
-      ]),
-    );
-    expect(tree.nodes[e4].eval).toBeUndefined();
+  test("never writes a game result as an evaluation, but counts the position as reviewed", () => {
+    // Fool's mate.
+    const tree = treeFromPgn({
+      startFen: "rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2",
+      moves: [
+        {
+          san: "Qh4#",
+          uci: "d8h4",
+          fen: "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3",
+        },
+      ],
+    });
+    const [root, mate] = mainline(tree);
+    expect(reviewCoverage(tree, DEPTH)).toEqual({ done: 1, total: 2 });
+    recordReview(tree, root, { score: { mate: -1 }, depth: DEPTH }, DEPTH);
+    recordReview(tree, mate, { score: { result: "0-1" }, depth: DEPTH }, DEPTH);
+    expect(tree.nodes[mate].eval).toBeUndefined();
+    expect(tree.nodes[mate].nags).toEqual([]);
+    expect(reviewCoverage(tree, DEPTH)).toEqual({ done: 2, total: 2 });
   });
 });

@@ -1,6 +1,9 @@
 //! The local game database: games imported from PGN files or saved from the board, kept in SQLite
 //! with every main-line position indexed by its Zobrist hash. That makes searching by position and
 //! the "My games" explorer a single index lookup, transpositions included.
+//!
+//! The database also remembers the names the user plays under, so the explorer can say how they
+//! score in a position and their games can be searched for blunders (see `blunders.rs`).
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -58,6 +61,10 @@ CREATE TABLE IF NOT EXISTS positions (
     PRIMARY KEY (key, game_id, ply)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS positions_game ON positions (game_id);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";
 
 /// Games per transaction while importing.
@@ -68,6 +75,13 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 const MAX_PAGE: u32 = 500;
 /// Error messages kept from an import.
 const MAX_MESSAGES: usize = 20;
+/// The `meta` key of the user's player names, one per line.
+const MY_NAMES: &str = "my_names";
+/// Player names the user can give, at most.
+const MAX_NAMES: usize = 20;
+const MAX_NAME_LENGTH: usize = 100;
+/// Frequent players offered as the user's names.
+const SUGGESTIONS: u32 = 6;
 
 pub struct Database {
     store: Store,
@@ -352,6 +366,8 @@ pub struct SearchQuery {
     result: Option<String>,
     /// Games that reached this position in their main line.
     fen: Option<String>,
+    /// Only games the user played, under one of their names.
+    mine: bool,
     offset: u32,
     limit: u32,
 }
@@ -451,6 +467,15 @@ fn search(conn: &Connection, query: &SearchQuery) -> Result<SearchResult, String
         conditions.push(format!("result = ?{}", values.len() + 1));
         values.push(Value::Text(result));
     }
+    if query.mine {
+        let names = my_names(conn).map_err(|e| e.to_string())?;
+        let n = values.len() + 1;
+        conditions.push(format!(
+            "(white COLLATE NOCASE IN (SELECT value FROM json_each(?{n}))
+              OR black COLLATE NOCASE IN (SELECT value FROM json_each(?{n})))"
+        ));
+        values.push(Value::Text(names_json(&names)));
+    }
     // The FEN parameter is positional (`?`), so the numbered ones start after it.
     let filter = if conditions.is_empty() {
         String::new()
@@ -499,19 +524,52 @@ fn search(conn: &Connection, query: &SearchQuery) -> Result<SearchResult, String
     Ok(SearchResult { games, total })
 }
 
-/// Move statistics for a position from the games in the database.
-fn explorer(conn: &Connection, root: &AnalysisRoot) -> rusqlite::Result<ExplorerResult> {
+/// A colour the user played, to explore only those games.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Side {
+    White,
+    Black,
+}
+
+/// Move statistics for a position from the games in the database, or only from the games in which
+/// the user had `side`.
+fn explorer(
+    conn: &Connection,
+    root: &AnalysisRoot,
+    side: Option<Side>,
+) -> rusqlite::Result<ExplorerResult> {
     let key = index::fen_key(&root.fen()).expect("the root's FEN is valid");
+    let (filter, names) = match side {
+        None => ("", String::new()),
+        Some(side) => (
+            match side {
+                Side::White => {
+                    "WHERE games.white COLLATE NOCASE IN (SELECT value FROM json_each(?2))"
+                }
+                Side::Black => {
+                    "WHERE games.black COLLATE NOCASE IN (SELECT value FROM json_each(?2))"
+                }
+            },
+            names_json(&my_names(conn)?),
+        ),
+    };
     // A game that repeats the position counts once per move played from it.
-    let mut statement = conn.prepare_cached(
+    let mut statement = conn.prepare_cached(&format!(
         "SELECT hit.next, games.result, COUNT(*),
                 AVG(CASE WHEN white_elo IS NOT NULL AND black_elo IS NOT NULL
                          THEN (white_elo + black_elo) / 2.0 END)
          FROM (SELECT DISTINCT game_id, next FROM positions WHERE key = ?1) AS hit
          JOIN games ON games.id = hit.game_id
-         GROUP BY hit.next, games.result",
-    )?;
-    let rows = statement.query_map([key], |row| {
+         {filter}
+         GROUP BY hit.next, games.result"
+    ))?;
+    let params: Vec<Value> = if side.is_some() {
+        vec![Value::Integer(key), Value::Text(names)]
+    } else {
+        vec![Value::Integer(key)]
+    };
+    let rows = statement.query_map(params_from_iter(params.iter()), |row| {
         Ok((
             row.get::<_, Option<u16>>(0)?,
             row.get::<_, String>(1)?,
@@ -573,6 +631,153 @@ fn explorer(conn: &Connection, root: &AnalysisRoot) -> rusqlite::Result<Explorer
         black: total.black,
         moves,
     })
+}
+
+// --- The user's names ---------------------------------------------------------------------------
+
+/// Trims names and drops blanks and repeats (ignoring case), keeping the first spelling.
+fn clean_names(names: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            name.chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_NAME_LENGTH)
+                .collect::<String>()
+                .trim()
+                .to_owned()
+        })
+        .filter(|name| !name.is_empty() && seen.insert(name.to_lowercase()))
+        .take(MAX_NAMES)
+        .collect()
+}
+
+/// The names the user plays under.
+pub(crate) fn my_names(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", [MY_NAMES], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(value
+        .map(|value| value.lines().map(str::to_owned).collect())
+        .unwrap_or_default())
+}
+
+fn set_my_names(conn: &Connection, names: Vec<String>) -> rusqlite::Result<Vec<String>> {
+    let names = clean_names(names);
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![MY_NAMES, names.join("\n")],
+    )?;
+    Ok(names)
+}
+
+/// Names as a JSON array, for `json_each` in queries.
+fn names_json(names: &[String]) -> String {
+    serde_json::to_string(names).expect("strings serialise")
+}
+
+/// The players with the most games, as suggestions for the user's own names.
+fn frequent_players(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut statement = conn.prepare_cached(
+        "SELECT name FROM (SELECT white AS name FROM games UNION ALL SELECT black FROM games)
+         WHERE name NOT IN ('', '?')
+         GROUP BY name COLLATE NOCASE
+         ORDER BY COUNT(*) DESC, name
+         LIMIT ?1",
+    )?;
+    statement
+        .query_map([SUGGESTIONS], |row| row.get(0))?
+        .collect()
+}
+
+/// A game the user played, as the blunder search reads it.
+pub(crate) struct OwnGame {
+    /// Identifies the game across databases: its fingerprint in hex.
+    pub fingerprint: String,
+    pub game: Game,
+    pub white: String,
+    pub black: String,
+    pub date: String,
+    pub event: String,
+}
+
+impl Database {
+    /// The user's names and the fingerprints of the games they played, newest first.
+    pub(crate) async fn own_games<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        self.store
+            .run(app, |conn| {
+                let names = my_names(conn)?;
+                let mut statement = conn.prepare_cached(
+                    "SELECT hex(fingerprint) FROM games
+                     WHERE white COLLATE NOCASE IN (SELECT value FROM json_each(?1))
+                        OR black COLLATE NOCASE IN (SELECT value FROM json_each(?1))
+                     ORDER BY date DESC, id DESC",
+                )?;
+                let games = statement
+                    .query_map([names_json(&names)], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?;
+                Ok((names, games))
+            })
+            .await
+    }
+
+    /// Reads one of the user's games by fingerprint; `None` if it was deleted.
+    pub(crate) async fn own_game<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        fingerprint: String,
+    ) -> Result<Option<OwnGame>, String> {
+        let Some(blob) = from_hex(&fingerprint) else {
+            return Ok(None);
+        };
+        let row = self
+            .store
+            .run(app, move |conn| {
+                conn.query_row(
+                    "SELECT pgn, white, black, date, event FROM games WHERE fingerprint = ?1",
+                    [blob],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()
+            })
+            .await?;
+        let Some((pgn, white, black, date, event)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(OwnGame {
+            game: index::game_from_pgn(&pgn)?,
+            fingerprint,
+            white,
+            black,
+            date,
+            event,
+        }))
+    }
+}
+
+fn from_hex(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) || !hex.is_ascii() {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
 }
 
 // --- Commands -----------------------------------------------------------------------------------
@@ -659,6 +864,44 @@ pub async fn db_add_game<R: Runtime>(
         .await
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedGames {
+    imported: u64,
+    duplicates: u64,
+    failed: u64,
+}
+
+/// Saves several games at once, e.g. ones fetched from Lichess or Chess.com. `source` names where
+/// they came from.
+#[tauri::command]
+pub async fn db_add_games<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+    games: Vec<Game>,
+    source: String,
+) -> Result<AddedGames, String> {
+    let mut added = AddedGames::default();
+    let records: Vec<GameRecord> = games
+        .iter()
+        .filter_map(|game| GameRecord::new(game).ok())
+        .collect();
+    added.failed = (games.len() - records.len()) as u64;
+    db.store
+        .run(&app, move |conn| {
+            let tx = conn.transaction()?;
+            for record in &records {
+                match record.insert(&tx, &source)? {
+                    Some(_) => added.imported += 1,
+                    None => added.duplicates += 1,
+                }
+            }
+            tx.commit()?;
+            Ok(added)
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn db_delete_game<R: Runtime>(
     app: AppHandle<R>,
@@ -689,15 +932,77 @@ pub async fn db_clear<R: Runtime>(
         .await
 }
 
-/// Move statistics for `fen` from the database, for the explorer's "My games" tab.
+/// Move statistics for `fen` from the database, for the explorer's "My games" tab: from every
+/// game, or with `side` only from the games in which the user played that colour.
 #[tauri::command]
 pub async fn db_explorer<R: Runtime>(
     app: AppHandle<R>,
     db: State<'_, Database>,
     fen: String,
+    side: Option<Side>,
 ) -> Result<ExplorerResult, String> {
     let root = AnalysisRoot::from_fen(&fen).map_err(|e| e.to_string())?;
-    db.store.run(&app, move |conn| explorer(conn, &root)).await
+    db.store
+        .run(&app, move |conn| explorer(conn, &root, side))
+        .await
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyNames {
+    names: Vec<String>,
+    /// The players with the most games, to pick from.
+    suggestions: Vec<String>,
+}
+
+/// The names the user plays under, and suggestions from the database.
+#[tauri::command]
+pub async fn db_my_names<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+) -> Result<MyNames, String> {
+    db.store
+        .run(&app, |conn| {
+            Ok(MyNames {
+                names: my_names(conn)?,
+                suggestions: frequent_players(conn)?,
+            })
+        })
+        .await
+}
+
+/// Sets the names the user plays under and returns them cleaned up.
+#[tauri::command]
+pub async fn db_set_my_names<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+    names: Vec<String>,
+) -> Result<Vec<String>, String> {
+    db.store
+        .run(&app, move |conn| set_my_names(conn, names))
+        .await
+}
+
+/// The ID of the game with this fingerprint (in hex), if it is still in the database.
+#[tauri::command]
+pub async fn db_find_game<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+    fingerprint: String,
+) -> Result<Option<i64>, String> {
+    let Some(blob) = from_hex(&fingerprint) else {
+        return Ok(None);
+    };
+    db.store
+        .run(&app, move |conn| {
+            conn.query_row(
+                "SELECT id FROM games WHERE fingerprint = ?1",
+                [blob],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .await
 }
 
 /// Asks for PGN files and imports them. Returns `None` when the dialog is cancelled.
@@ -899,7 +1204,7 @@ mod tests {
             add(&mut conn, pgn_text);
         }
         let root = AnalysisRoot::from_fen(pgn::STARTING_FEN).unwrap();
-        let result = explorer(&conn, &root).unwrap();
+        let result = explorer(&conn, &root, None).unwrap();
         assert_eq!((result.white, result.draws, result.black), (1, 1, 1));
         assert_eq!(result.moves.len(), 2);
         assert_eq!(result.moves[0].san, "e4");
@@ -909,10 +1214,50 @@ mod tests {
         assert_eq!(result.moves[1].average_rating, None);
 
         let fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
-        let result = explorer(&conn, &AnalysisRoot::from_fen(fen).unwrap()).unwrap();
+        let result = explorer(&conn, &AnalysisRoot::from_fen(fen).unwrap(), None).unwrap();
         let sans: Vec<_> = result.moves.iter().map(|m| m.san.as_str()).collect();
         assert_eq!(sans.len(), 2);
         assert!(sans.contains(&"Bb5") && sans.contains(&"Bc4"));
+    }
+
+    #[test]
+    fn remembers_the_users_names_and_explores_their_games() {
+        let mut conn = database();
+        for pgn_text in [RUY, ITALIAN, QUEENS] {
+            add(&mut conn, pgn_text);
+        }
+        assert!(my_names(&conn).unwrap().is_empty());
+        let suggestions = frequent_players(&conn).unwrap();
+        assert_eq!(suggestions.len(), 3);
+        let saved = set_my_names(
+            &conn,
+            vec![" mochi ".into(), "".into(), "MOCHI".into(), "Mochi2".into()],
+        )
+        .unwrap();
+        assert_eq!(saved, ["mochi", "Mochi2"]);
+        assert_eq!(my_names(&conn).unwrap(), saved);
+
+        // Mochi had Black in the Ruy Lopez (lost) and White in the Italian (lost).
+        let root = AnalysisRoot::from_fen(pgn::STARTING_FEN).unwrap();
+        let white = explorer(&conn, &root, Some(Side::White)).unwrap();
+        assert_eq!((white.white, white.draws, white.black), (0, 0, 1));
+        let black = explorer(&conn, &root, Some(Side::Black)).unwrap();
+        assert_eq!((black.white, black.draws, black.black), (1, 0, 0));
+        assert_eq!(black.moves[0].san, "e4");
+
+        let mine = search(&conn, &query(|q| q.mine = true)).unwrap();
+        assert_eq!(mine.total, 2);
+        set_my_names(&conn, Vec::new()).unwrap();
+        assert_eq!(search(&conn, &query(|q| q.mine = true)).unwrap().total, 0);
+        let none = explorer(&conn, &root, Some(Side::White)).unwrap();
+        assert!(none.moves.is_empty());
+    }
+
+    #[test]
+    fn decodes_fingerprints() {
+        assert_eq!(from_hex("00ff10"), Some(vec![0, 255, 16]));
+        assert_eq!(from_hex("0"), None);
+        assert_eq!(from_hex("zz"), None);
     }
 
     #[test]

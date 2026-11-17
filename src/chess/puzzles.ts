@@ -3,9 +3,13 @@
 // A Lichess puzzle starts one move early: the first move is the opponent's, played automatically,
 // and the solver plays every second move after it. The last move may be any checkmate, since
 // mating puzzles often have more than one.
+//
+// Puzzles from the user's own blunders (`src-tauri/src/blunders.rs`) work the same way: the
+// opponent's move before the blunder comes first, then the move the user missed.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { type Color, fenTurn } from "./board";
+import { createRoot, createSignal } from "solid-js";
+import { type Color, fenPlyIndex, fenTurn } from "./board";
 import type { PgnGame, PgnMove } from "./pgn";
 import { hasLegalMoves, inCheck, makeMove, parseFen } from "./rules";
 
@@ -20,9 +24,27 @@ export type PuzzleData = {
   plays: number;
   themes: string[];
   gameUrl: string;
+  /** For puzzles from the user's own games: where it comes from. */
+  origin?: PuzzleOrigin;
 };
 
-export type Mode = "rated" | "streak";
+/** The game a puzzle from the user's blunders comes from. */
+export type PuzzleOrigin = {
+  /** The game's fingerprint in the game database. */
+  game: string;
+  /** Moves played in the game before the blunder. */
+  ply: number;
+  /** The move played in the game, in SAN. */
+  played: string;
+  /** Winning chances the move gave away, in percentage points. */
+  loss: number;
+  white: string;
+  black: string;
+  date: string;
+  event: string;
+};
+
+export type Mode = "rated" | "streak" | "mine";
 
 export type Profile = {
   rating: number;
@@ -48,6 +70,35 @@ export type PuzzleStatus = {
   profile: Profile;
   /** Newest first. */
   history: Attempt[];
+  own: OwnStatus;
+};
+
+/** The puzzles from the user's own blunders. */
+export type OwnStatus = {
+  count: number;
+  /** Never tried yet. */
+  fresh: number;
+  /** Missed the last time they were tried. */
+  missed: number;
+  /** Games searched for blunders so far. */
+  scannedGames: number;
+};
+
+export type ScanProgress = {
+  gamesDone: number;
+  gamesTotal: number;
+  positionsDone: number;
+  positionsTotal: number;
+  found: number;
+  game: string;
+};
+
+export type ScanSummary = {
+  scanned: number;
+  found: number;
+  cancelled: boolean;
+  /** The user's games still waiting to be searched. */
+  remaining: number;
 };
 
 export type RecordResult = { profile: Profile; ratingChange: number | null };
@@ -63,6 +114,31 @@ export const puzzleStatus = () => invoke<PuzzleStatus>("puzzles_status");
 
 export const nextPuzzle = (request: { target?: number; theme?: string; exclude?: string[] }) =>
   invoke<PuzzleData | null>("puzzles_next", { request });
+
+/** The next puzzle from the user's blunders, or `null` when there are none yet. */
+export const nextOwnPuzzle = (exclude: string[]) =>
+  invoke<PuzzleData | null>("puzzles_next_own", { exclude });
+
+/** Forgets the puzzles from the user's games and which games were searched. */
+export const clearOwnPuzzles = () => invoke<PuzzleStatus>("puzzles_clear_own");
+
+/** The blunder search that is running, if any, so it survives leaving the section. */
+const scan = createRoot(() => createSignal<ScanProgress | "starting">());
+export const blunderScan = scan[0];
+
+/** Searches the user's games for blunders to make puzzles from. */
+export async function findBlunders(): Promise<ScanSummary> {
+  const channel = new Channel<ScanProgress>();
+  channel.onmessage = (progress) => scan[1](progress);
+  scan[1]("starting");
+  try {
+    return await invoke<ScanSummary>("puzzles_find_blunders", { onProgress: channel });
+  } finally {
+    scan[1](undefined);
+  }
+}
+
+export const cancelBlunderSearch = () => invoke<void>("puzzles_cancel_blunders");
 
 export const recordPuzzle = (id: string, mode: Mode, solved: boolean) =>
   invoke<RecordResult>("puzzles_record", { id, mode, solved });
@@ -116,6 +192,28 @@ export function playUci(fen: string, uci: string) {
   });
 }
 
+/**
+ * The move the user played in the game instead of the solution, with its move number, e.g.
+ * `23...Qh5??`. Only for puzzles from the user's own games.
+ */
+export function playedMove(puzzle: PuzzleData): string | undefined {
+  const origin = puzzle.origin;
+  const first = puzzle.moves[0];
+  if (!origin || !first) return undefined;
+  const after = playUci(puzzle.fen, first);
+  if (!after) return undefined;
+  const ply = fenPlyIndex(after.fen);
+  const number = Math.floor(ply / 2) + 1;
+  return `${number}${ply % 2 === 0 ? "." : "..."}${origin.played}??`;
+}
+
+/** The opponent in the game a puzzle from the user's blunders comes from. */
+export function opponentName(puzzle: PuzzleData): string | undefined {
+  const origin = puzzle.origin;
+  if (!origin) return undefined;
+  return (solverSide(puzzle) === "w" ? origin.black : origin.white) || "your opponent";
+}
+
 /** The puzzle and its solution as a game, to explore on the board. */
 export function puzzleGame(puzzle: PuzzleData): PgnGame {
   const moves: PgnMove[] = [];
@@ -125,6 +223,20 @@ export function puzzleGame(puzzle: PuzzleData): PgnGame {
     if (!move) break;
     moves.push(move);
     fen = move.fen;
+  }
+  const origin = puzzle.origin;
+  if (origin) {
+    return {
+      headers: [
+        ["Event", `Purrzle from ${origin.event || "your game"}`],
+        ["Date", origin.date || "????.??.??"],
+        ["White", origin.white || "?"],
+        ["Black", origin.black || "?"],
+        ["Annotator", `In the game: ${playedMove(puzzle) ?? origin.played}`],
+      ],
+      startFen: puzzle.fen,
+      moves,
+    };
   }
   return {
     headers: [
@@ -166,10 +278,22 @@ export const THEMES: readonly { value: string; label: string }[] = [
   { value: "opening", label: "Opening" },
 ];
 
+/** Names for themes of puzzles from the user's games that the filter doesn't offer. */
+const OTHER_THEMES: Record<string, string> = {
+  oneMove: "One move",
+  short: "Short",
+  long: "Long",
+  mate: "Checkmate",
+  crushing: "Crushing",
+  advantage: "Advantage",
+  equality: "Saves the game",
+};
+
 /** A theme key such as `discoveredAttack` as words: `Discovered attack`. */
 export function themeLabel(theme: string): string {
   const known = THEMES.find((entry) => entry.value === theme);
   if (known) return known.label;
+  if (OTHER_THEMES[theme]) return OTHER_THEMES[theme];
   const words = theme.replace(/([a-z])([A-Z0-9])/g, "$1 $2").toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }

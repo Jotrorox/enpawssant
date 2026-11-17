@@ -10,6 +10,7 @@ import type { Outcome, Termination } from "./outcome";
 export type LichessError =
   | { kind: "signedOut" }
   | { kind: "rateLimited" }
+  | { kind: "notFound" }
   | { kind: "failed"; message: string };
 
 export function toLichessError(reason: unknown): LichessError {
@@ -23,6 +24,8 @@ export function describeLichessError(error: LichessError): string {
       return "You're signed out of Lichess. Sign in again to play.";
     case "rateLimited":
       return "Lichess asked Mochi to slow down. Try again in a minute.";
+    case "notFound":
+      return "Lichess doesn't know that game or player.";
     case "failed":
       return error.message;
   }

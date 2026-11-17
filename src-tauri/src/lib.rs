@@ -1,3 +1,4 @@
+mod blunders;
 mod board;
 mod database;
 mod engine;
@@ -5,14 +6,17 @@ mod engines;
 mod explorer;
 mod files;
 mod lichess;
+mod online;
 mod pgn;
 mod puzzles;
 mod store;
 
+use blunders::Blunders;
 use database::Database;
 use engine::{Clock, Engine, EngineEvent, EngineInfo, Opponent, Strength};
 use engines::Engines;
 use lichess::Lichess;
+use online::ChessCom;
 use puzzles::Puzzles;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, RunEvent, State};
@@ -103,8 +107,10 @@ pub fn run() {
         .manage(Engines::default())
         .manage(Lichess::default())
         .manage(board::Streams::default())
+        .manage(ChessCom::default())
         .manage(Database::default())
         .manage(Puzzles::default())
+        .manage(Blunders::default())
         .invoke_handler(tauri::generate_handler![
             engine_info,
             engine_analyze,
@@ -131,12 +137,16 @@ pub fn run() {
             database::db_search,
             database::db_game,
             database::db_add_game,
+            database::db_add_games,
             database::db_delete_game,
             database::db_clear,
             database::db_explorer,
             database::db_import_files,
             database::db_import_paths,
             database::db_cancel_import,
+            database::db_my_names,
+            database::db_set_my_names,
+            database::db_find_game,
             explorer::explorer_moves,
             explorer::opening_name,
             explorer::lichess_account,
@@ -155,8 +165,14 @@ pub fn run() {
             board::lichess_game_chat,
             board::lichess_game_chat_history,
             board::lichess_playing,
+            online::lichess_games,
+            online::chesscom_games,
             puzzles::puzzles_status,
             puzzles::puzzles_next,
+            puzzles::puzzles_next_own,
+            puzzles::puzzles_clear_own,
+            blunders::puzzles_find_blunders,
+            blunders::puzzles_cancel_blunders,
             puzzles::puzzles_record,
             puzzles::puzzles_finish_run,
             puzzles::puzzles_reset_progress,
@@ -169,8 +185,9 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 let (engine, opponent) = (app.state::<Engine>(), app.state::<Opponent>());
+                let blunders = app.state::<Blunders>();
                 tauri::async_runtime::block_on(async {
-                    tokio::join!(engine.shutdown(), opponent.shutdown());
+                    tokio::join!(engine.shutdown(), opponent.shutdown(), blunders.shutdown());
                 });
             }
         });

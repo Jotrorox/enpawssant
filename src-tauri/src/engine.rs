@@ -16,6 +16,10 @@
 //! [`Opponent`]), so its playing strength never touches the analysis. Its
 //! searches play a move under a clock and end with the move in `done`.
 //!
+//! Background jobs such as the blunder search (`blunders.rs`) run the analysis
+//! engine as a separate process with fewer threads ([`Engine::background`]) and
+//! wait for each search with [`Engine::search`] instead of streaming it.
+//!
 //! Switching positions has to wait for the engine: after `stop`, Stockfish still
 //! prints `info` lines for the old search until its `bestmove`. The actor drops
 //! those lines and only then starts the next search. Requests that arrive in
@@ -57,11 +61,31 @@ const FULL_SKILL: i64 = 20;
 const ELO_OPTION: &str = "UCI_Elo";
 const SKILL_OPTION: &str = "Skill Level";
 
+/// How many threads a session gives its engine, unless the user chose a number.
+#[derive(Copy, Clone, Debug)]
+enum Threads {
+    /// Every core but one, leaving it for the UI.
+    AllButOne,
+    /// Half the cores, leaving the rest to the live analysis.
+    Half,
+    One,
+}
+
+impl Threads {
+    fn count(self) -> usize {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        match self {
+            Threads::AllButOne => cores.saturating_sub(1).max(1),
+            Threads::Half => (cores / 2).max(1),
+            Threads::One => 1,
+        }
+    }
+}
+
 /// How a session sets up its engine, unless the user chose other values.
 #[derive(Copy, Clone, Debug)]
 struct Config {
-    /// Use every core but one, leaving it for the UI; otherwise one thread.
-    all_cores: bool,
+    threads: Threads,
     hash_mb: u32,
     /// Time the engine keeps in reserve per move for the trip to the UI and back.
     move_overhead_ms: Option<u32>,
@@ -69,16 +93,22 @@ struct Config {
 
 /// Analysis gets the machine.
 const ANALYSIS: Config = Config {
-    all_cores: true,
+    threads: Threads::AllButOne,
     hash_mb: 256,
     move_overhead_ms: None,
 };
 /// A limited opponent needs little, and leaves the cores to the analysis.
 const OPPONENT: Config = Config {
-    all_cores: false,
+    threads: Threads::One,
     hash_mb: 32,
     // The game clock runs in the frontend, which sees the move a little later.
     move_overhead_ms: Some(100),
+};
+/// Background jobs share the machine with the live analysis.
+const BACKGROUND: Config = Config {
+    threads: Threads::Half,
+    hash_mb: 64,
+    move_overhead_ms: None,
 };
 
 /// What the frontend shows about the running engine.
@@ -238,16 +268,16 @@ pub struct AnalysisUpdate {
     /// The position as the frontend sent it.
     fen: String,
     /// Depth and selective depth of the best line.
-    depth: u32,
+    pub(crate) depth: u32,
     seldepth: u32,
     nodes: u64,
     nps: u64,
     time_ms: u64,
     /// Best line first.
-    lines: Vec<Line>,
+    pub(crate) lines: Vec<Line>,
     /// `1-0`, `0-1` or `1/2-1/2` when the side to move is checkmated or
     /// stalemated. Such positions are not searched and have no lines.
-    outcome: Option<&'static str>,
+    pub(crate) outcome: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -256,9 +286,23 @@ pub struct Line {
     multipv: u32,
     depth: u32,
     /// From White's point of view.
-    score: WireScore,
-    san: Vec<String>,
-    uci: Vec<String>,
+    pub(crate) score: WireScore,
+    pub(crate) san: Vec<String>,
+    pub(crate) uci: Vec<String>,
+}
+
+#[cfg(test)]
+impl Line {
+    /// A best line with `score` and `uci` moves, for tests elsewhere.
+    pub(crate) fn for_tests(score: WireScore, uci: Vec<String>) -> Line {
+        Line {
+            multipv: 1,
+            depth: 1,
+            score,
+            san: uci.clone(),
+            uci,
+        }
+    }
 }
 
 /// Serialised as `{ "cp": 35 }` or `{ "mate": -3 }`.
@@ -336,7 +380,7 @@ impl Opponent {
             go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
             strength: strength.clamped(&info),
             new_game,
-            channel,
+            channel: channel.into(),
         };
         self.0.submit(app, &Self::target(), request).await
     }
@@ -393,6 +437,32 @@ enum Command {
     Quit(oneshot::Sender<()>),
 }
 
+/// Where the events of a search go: to the frontend, or to a task in Rust.
+enum Sink {
+    Channel(Channel<EngineEvent>),
+    Local(mpsc::UnboundedSender<EngineEvent>),
+}
+
+impl Sink {
+    /// A closed sink means whoever asked moved on, so failures are ignored.
+    fn send(&self, event: EngineEvent) {
+        match self {
+            Sink::Channel(channel) => {
+                let _ = channel.send(event);
+            }
+            Sink::Local(sender) => {
+                let _ = sender.send(event);
+            }
+        }
+    }
+}
+
+impl From<Channel<EngineEvent>> for Sink {
+    fn from(channel: Channel<EngineEvent>) -> Self {
+        Sink::Channel(channel)
+    }
+}
+
 struct Request {
     fen: String,
     root: AnalysisRoot,
@@ -401,7 +471,7 @@ struct Request {
     strength: Strength,
     /// Sends `ucinewgame` first, so the engine forgets the last game.
     new_game: bool,
-    channel: Channel<EngineEvent>,
+    channel: Sink,
 }
 
 impl Request {
@@ -410,7 +480,7 @@ impl Request {
         root: AnalysisRoot,
         multipv: u32,
         go: Go,
-        channel: Channel<EngineEvent>,
+        channel: impl Into<Sink>,
     ) -> Self {
         Request {
             fen,
@@ -419,13 +489,12 @@ impl Request {
             go,
             strength: Strength::Full,
             new_game: false,
-            channel,
+            channel: channel.into(),
         }
     }
 
     fn send_done(&self, complete: bool, bestmove: Option<String>) {
-        // A closed channel means the frontend moved on.
-        let _ = self.channel.send(EngineEvent::Done { complete, bestmove });
+        self.channel.send(EngineEvent::Done { complete, bestmove });
     }
 }
 
@@ -441,6 +510,37 @@ impl Engine {
             sessions: Mutex::new(HashMap::new()),
             config,
         }
+    }
+
+    /// Sessions for background jobs: separate processes with half the cores,
+    /// so they never interrupt the live analysis.
+    pub fn background() -> Self {
+        Engine::with_config(BACKGROUND)
+    }
+
+    /// Searches `fen` with engine `id` to `depth` and waits for the result.
+    /// Fails if the search is stopped or replaced before it gets there.
+    pub async fn search<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        engines: &Engines,
+        id: &str,
+        fen: &str,
+        multipv: u32,
+        depth: u32,
+    ) -> Result<AnalysisUpdate, String> {
+        let root = AnalysisRoot::from_fen(fen).map_err(|e| e.to_string())?;
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let request = Request::analysis(
+            fen.to_owned(),
+            root,
+            multipv.clamp(1, MAX_MULTIPV),
+            Go::Depth(depth.clamp(1, MAX_DEPTH)),
+            Sink::Local(sender),
+        );
+        let target = Target::from_registry(app, engines, id)?;
+        self.submit(app, &target, request).await?;
+        final_update(&mut events).await
     }
 
     /// Starts the engine `id` if needed and describes it.
@@ -535,6 +635,26 @@ impl Engine {
         }
         Err("the engine stopped unexpectedly".into())
     }
+}
+
+/// The last update of a search, once it completed.
+async fn final_update(
+    events: &mut mpsc::UnboundedReceiver<EngineEvent>,
+) -> Result<AnalysisUpdate, String> {
+    let mut last = None;
+    while let Some(event) = events.recv().await {
+        match event {
+            EngineEvent::Update(update) => last = Some(update),
+            EngineEvent::Done { complete: true, .. } => {
+                return last.ok_or_else(|| "the engine found no move".into());
+            }
+            EngineEvent::Done {
+                complete: false, ..
+            } => break,
+            EngineEvent::Error { message } => return Err(message),
+        }
+    }
+    Err("the search was stopped".into())
 }
 
 async fn quit(session: Session) {
@@ -638,12 +758,7 @@ fn startup_values(
     chosen: &BTreeMap<String, String>,
     config: Config,
 ) -> Vec<(UciOption, String)> {
-    let threads = if config.all_cores {
-        // Leave a core for the UI.
-        std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
-    } else {
-        1
-    };
+    let threads = config.threads.count();
     options
         .iter()
         .filter(|option| !MANAGED_OPTIONS.contains(&option.name.as_str()))
@@ -860,8 +975,8 @@ impl Search {
             lines: self.lines.iter().flatten().cloned().collect(),
             outcome: None,
         };
-        // A closed channel means the frontend moved on; the search ends with the next request.
-        let _ = self.request.channel.send(EngineEvent::Update(update));
+        // A closed sink means the frontend moved on; the search ends with the next request.
+        self.request.channel.send(EngineEvent::Update(update));
     }
 }
 
@@ -1060,7 +1175,7 @@ impl<I: EngineInput> Actor<I> {
             State::Idle => None,
         };
         if let Some(request) = request {
-            let _ = request.channel.send(EngineEvent::Error { message });
+            request.channel.send(EngineEvent::Error { message });
         }
     }
 
@@ -1090,8 +1205,103 @@ fn send_final(request: &Request, outcome: KnownOutcome) {
         lines: Vec::new(),
         outcome: Some(outcome.as_str()),
     };
-    let _ = request.channel.send(EngineEvent::Update(update));
+    request.channel.send(EngineEvent::Update(update));
     request.send_done(true, None);
+}
+
+/// The bundled Stockfish without Tauri, for tests of code that searches.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::io::{BufRead, Write};
+    use std::process::{Child, ChildStdin, Command as Process, Stdio};
+
+    use tauri_plugin_shell::process::TerminatedPayload;
+
+    use super::*;
+
+    struct ProcessInput(ChildStdin);
+
+    impl EngineInput for ProcessInput {
+        fn send_line(&mut self, line: &str) -> Result<(), String> {
+            writeln!(self.0, "{line}").map_err(|e| e.to_string())
+        }
+    }
+
+    /// A Stockfish process driven by the same actor as in the app. `tauri-build` refuses to build
+    /// without the sidecar, so it is always there when tests run.
+    pub struct LocalStockfish {
+        commands: mpsc::UnboundedSender<Command>,
+        child: Child,
+    }
+
+    impl LocalStockfish {
+        pub fn start() -> LocalStockfish {
+            let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(format!("{SIDECAR}-{}", env!("TARGET_TRIPLE")))
+                .with_extension(std::env::consts::EXE_EXTENSION);
+            let mut child = Process::new(binary)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("the bundled Stockfish starts");
+            let mut input = ProcessInput(child.stdin.take().unwrap());
+            let stdout = child.stdout.take().unwrap();
+            let (sender, events) = async_runtime::channel(256);
+            std::thread::spawn(move || {
+                for line in std::io::BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    if sender
+                        .blocking_send(CommandEvent::Stdout(line.into_bytes()))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                let exit = TerminatedPayload {
+                    code: Some(0),
+                    signal: None,
+                };
+                let _ = sender.blocking_send(CommandEvent::Terminated(exit));
+            });
+            let threads = BACKGROUND.threads.count();
+            input
+                .send_line(&format!("setoption name Threads value {threads}"))
+                .unwrap();
+            input.send_line("setoption name Hash value 64").unwrap();
+            let (commands, receiver) = mpsc::unbounded_channel();
+            async_runtime::spawn(Actor::new(input, events).run(receiver));
+            LocalStockfish { commands, child }
+        }
+
+        pub async fn search(
+            &self,
+            fen: &str,
+            multipv: u32,
+            depth: u32,
+        ) -> Result<AnalysisUpdate, String> {
+            let root = AnalysisRoot::from_fen(fen).map_err(|e| e.to_string())?;
+            let (sender, mut events) = mpsc::unbounded_channel();
+            let request = Request::analysis(
+                fen.to_owned(),
+                root,
+                multipv,
+                Go::Depth(depth),
+                Sink::Local(sender),
+            );
+            self.commands
+                .send(Command::Analyze(Box::new(request)))
+                .map_err(|_| "the engine is gone".to_string())?;
+            final_update(&mut events).await
+        }
+    }
+
+    impl Drop for LocalStockfish {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1178,7 +1388,7 @@ mod tests {
                 go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
                 strength,
                 new_game,
-                channel,
+                channel: channel.into(),
             };
             assert!(
                 self.commands
