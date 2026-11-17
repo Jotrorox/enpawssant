@@ -7,6 +7,8 @@
   --color-*: initial;
   /* Card and field surfaces: white in the light theme, a dark plum in the dark one. */
   --color-white: #ffffff;
+  /* The selected tab of a segmented control, raised above its track in both themes. */
+  --color-raised: #ffffff;
   /* Always white, e.g. White's side of the eval bar or text on a dark chip. */
   --color-snow: #ffffff;
   /* White's side of the eval graph, which stays light in the dark theme. */
@@ -51,25 +53,32 @@
   --shadow-card: 0 1px 2px rgb(74 50 71 / 0.04), 0 4px 16px rgb(74 50 71 / 0.04);
 }
 
-/* The dark theme swaps the palette; components keep using the same colour names. Board colours
-   come from the board theme and stay the same in both. */
+/* The dark theme swaps the palette; components keep using the same colour names. It is a cat's
+   night in: deep plum surfaces lit by warm rose, never pure black. Board colours come from the board
+   theme and are only dimmed a little (see `.board-surface`). */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-white: #2a2030;
-  --color-ink: #f4e8ef;
-  --color-muted: #b6a1b2;
-  --color-plum-soft: #5d4a5a;
+  --color-white: #241b2b;
+  --color-raised: #44344e;
+  --color-ink: #f6eaf1;
+  --color-muted: #b9a3b5;
+  --color-plum: #4e3a52;
+  --color-plum-soft: #5a4760;
 
-  --color-blush-50: #1b1420;
-  --color-blush-100: #31253a;
-  --color-blush-200: #443348;
-  --color-blush-300: #5b4058;
-  --color-blush-400: #7d506d;
-  --color-rose: #ec87a4;
-  --color-rose-strong: #f4a0b8;
+  --color-blush-50: #19131e;
+  --color-blush-100: #2c2234;
+  --color-blush-200: #3a2d43;
+  /* Main buttons and the current move: a berry that glows a little, lighter on hover. */
+  --color-blush-300: #b05a82;
+  --color-blush-400: #96486d;
+  --color-rose: #f08aa8;
+  --color-rose-strong: #ffa3bd;
 
-  --color-lavender: #302c47;
-  --color-eval-light: #e9dde5;
+  --color-cream: #f2d48e;
+  --color-peach: #eeac7d;
+  --color-lavender: #2d2943;
+  /* White's side of the eval bar and graph, soft enough not to glare. */
+  --color-eval-light: #c4b1bf;
 
   --color-nag-brilliant: #4cc38a;
   --color-nag-good: #63c873;
@@ -79,7 +88,7 @@
 
   --color-error: #ff8f86;
 
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25), 0 4px 16px rgb(0 0 0 / 0.2);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -8px rgb(0 0 0 / 0.35);
 }
 
 /* Board themes: the squares, the frame (with its cat ears), last-move highlights and coordinates. */
@@ -212,6 +221,34 @@
   width: min(100cqw, calc(100cqh - 30px));
 }
 
+/* The board keeps its theme's colours at night but is dimmed a touch so it doesn't glare. */
+.board-surface {
+  transition: filter 300ms ease;
+}
+
+:root[data-theme="dark"] .board-surface {
+  filter: brightness(0.9);
+}
+
+/* Switching theme from the side rail reveals the new one in a circle growing from the toggle (see
+   `appearance.ts`); the default cross-fade is turned off so only the circle animates. */
+:root.theme-switching::view-transition-old(root),
+:root.theme-switching::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+:root.theme-switching::view-transition-new(root) {
+  z-index: 1;
+}
+
+/* The sun and moon on the theme toggle trade places. */
+.theme-toggle-icon {
+  transition:
+    transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 250ms ease;
+}
+
 /* Board pieces. The outer element is positioned on its square; the inner image handles lifting,
    capturing and appearing so those never fight with the glide between squares. */
 .board-piece {
@@ -331,7 +368,8 @@
 @media (prefers-reduced-motion: reduce) {
   .board-piece,
   .board-piece-image,
-  .board-piece-fx {
+  .board-piece-fx,
+  .theme-toggle-icon {
     transition-duration: 0ms;
   }
 

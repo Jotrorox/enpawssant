@@ -172,7 +172,7 @@ function EvalBar(props: { score?: Score; orientation: Color }) {
     <div
       role="img"
       aria-label={props.score ? `Evaluation ${formatScore(props.score)}` : "No evaluation yet"}
-      class={`relative mt-[30px] flex w-[22px] shrink-0 overflow-hidden rounded-full bg-snow ring-1 ring-blush-200 ${
+      class={`relative mt-[30px] flex w-[22px] shrink-0 overflow-hidden rounded-full bg-snow ring-1 ring-blush-200 dark:bg-eval-light ${
         blackOnTop() ? "flex-col" : "flex-col-reverse"
       }`}
     >
