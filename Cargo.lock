@@ -522,7 +522,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chess-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "pgn-reader",
  "serde",
@@ -1048,7 +1048,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "enpawssant"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "base64 0.22.1",
  "chess-core",
