@@ -62,6 +62,8 @@ type Tab = WorkspaceTab & {
   game?: EngineGame | OnlineGame;
   /** The Lichess game played in the tab. */
   lichessId?: string;
+  /** Set for a finished game opened to analyse, until its full-game analysis has started. */
+  reviewOnOpen?: boolean;
 };
 
 export default function App() {
@@ -206,6 +208,15 @@ export default function App() {
   const selectTab = (id: string) => {
     setActiveId(id);
     setSection("board");
+  };
+
+  /**
+   * Opens a finished game in a new, ordinary tab, from the start, and analyses the whole game
+   * there. The game's own tab keeps the clocks and result.
+   */
+  const analyseGame = (tab: Tab) => {
+    const created = createTab(tab.session.toPgn(), tab.title);
+    openTabs([{ ...created, reviewOnOpen: true }]);
   };
 
   /** Switches to the tab of Lichess game `id`, opening one if needed. */
@@ -447,6 +458,12 @@ export default function App() {
                     onExport={() => setExporting(true)}
                     onSaveToDatabase={() => void saveToDatabase()}
                     onPlay={() => setChoosingGame(true)}
+                    onAnalyse={() => analyseGame(tab)}
+                    takeReviewOnOpen={() => {
+                      const pending = tab.reviewOnOpen === true;
+                      tab.reviewOnOpen = false;
+                      return pending;
+                    }}
                   />
                 )}
               </Show>
@@ -505,6 +522,9 @@ function GameWorkspace(props: {
   onExport: () => void;
   onSaveToDatabase: () => void;
   onPlay: () => void;
+  onAnalyse: () => void;
+  /** Whether the tab was opened to analyse a game, which is then analysed straight away. */
+  takeReviewOnOpen: () => boolean;
 }) {
   const session = props.session;
   const game = props.game;
@@ -575,6 +595,12 @@ function GameWorkspace(props: {
     if (fairPlay() && engine.reviewProgress()) engine.cancelReview();
   });
 
+  // "Analyse this game" opens a tab that analyses the whole game at once, unless another game is
+  // on; the button in the toolbar starts it later.
+  onMount(() => {
+    if (props.takeReviewOnOpen() && !fairPlay()) void reviewGame();
+  });
+
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -642,6 +668,7 @@ function GameWorkspace(props: {
         fairPlay={fairPlay()}
         liveGame={props.liveGame}
         onNewGame={props.onPlay}
+        onAnalyse={props.onAnalyse}
       />
     </div>
   );

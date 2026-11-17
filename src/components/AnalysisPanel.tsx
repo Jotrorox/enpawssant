@@ -68,6 +68,7 @@ type AnalysisPanelProps = {
   /** The game in progress when it is in another tab. */
   liveGame?: LiveGame;
   onNewGame: () => void;
+  onAnalyse: () => void;
 };
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
@@ -101,7 +102,14 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         }
       >
         <Show when={props.game}>
-          {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
+          {(game) => (
+            <PlayCard
+              session={props.session}
+              game={game()}
+              onNewGame={props.onNewGame}
+              onAnalyse={props.onAnalyse}
+            />
+          )}
         </Show>
         {/* No help from the engine or the explorer while a game is on, in any tab. */}
         <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>

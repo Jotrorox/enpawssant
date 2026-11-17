@@ -16,7 +16,7 @@ import type { OnlineGame } from "../game/online";
 import type { EngineGame } from "../game/play";
 import { otherSide } from "../game/played";
 import type { GameSession } from "../game/session";
-import { ChessClockIcon, ExternalIcon } from "./Icons";
+import { ChartIcon, ChessClockIcon, ExternalIcon } from "./Icons";
 import { Card, CardTitle } from "./ui";
 
 /** Time left below which a clock turns red, in ms. */
@@ -33,7 +33,13 @@ const DANGER = `${SMALL_BUTTON} bg-rose text-white hover:bg-rose-strong`;
 type AnyGame = EngineGame | OnlineGame;
 
 /** The clocks, players and controls of a game being played: against Stockfish or on Lichess. */
-export function PlayCard(props: { session: GameSession; game: AnyGame; onNewGame: () => void }) {
+export function PlayCard(props: {
+  session: GameSession;
+  game: AnyGame;
+  onNewGame: () => void;
+  /** Opens the finished game in a new tab, with the engine. */
+  onAnalyse: () => void;
+}) {
   const game = () => props.game;
   const online = () => (props.game.kind === "online" ? props.game : undefined);
   const engine = () => (props.game.kind === "engine" ? props.game : undefined);
@@ -97,12 +103,18 @@ export function PlayCard(props: { session: GameSession; game: AnyGame; onNewGame
           <Show
             when={game().playing()}
             fallback={
-              <Show when={game().kind === "engine"}>
-                <button type="button" class={PRIMARY} onClick={() => props.onNewGame()}>
-                  <ChessClockIcon class="size-4" />
-                  New game
+              <>
+                <Show when={game().kind === "engine"}>
+                  <button type="button" class={SECONDARY} onClick={() => props.onNewGame()}>
+                    <ChessClockIcon class="size-4" />
+                    New game
+                  </button>
+                </Show>
+                <button type="button" class={PRIMARY} onClick={() => props.onAnalyse()}>
+                  <ChartIcon class="size-4" />
+                  Analyse this game
                 </button>
-              </Show>
+              </>
             }
           >
             <Show when={online()}>{(current) => <OfferButtons game={current()} />}</Show>

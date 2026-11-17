@@ -95,6 +95,13 @@ in progress, so close its tab to analyse other games between moves.
 You can step back through the moves during a game; the board takes your move again once you're
 back at the end. A game's result and time control go into the PGN headers.
 
+### After the game
+
+**Analyse this game** appears on the play card once any game is over, against Stockfish or on
+Lichess. It opens the game in a new, ordinary tab with live analysis, the explorer and everything
+else, and starts the full-game analysis there straight away (unless another game is still on). The
+game's own tab keeps its clocks and result.
+
 ## Games
 
 Each game tab holds a move tree (`src/chess/tree.ts`), so trying a different move never throws the
