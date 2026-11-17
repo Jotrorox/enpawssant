@@ -40,6 +40,9 @@ pub struct Game {
     pub headers: Vec<(String, String)>,
     /// The position before the first move.
     pub start_fen: String,
+    /// A comment about the starting position, written before the first move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
     /// The main line.
     #[serde(default)]
     pub moves: Vec<Move>,
@@ -58,7 +61,8 @@ pub struct Move {
     /// Numeric annotation glyphs, e.g. `1` for `!`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nags: Vec<u8>,
-    /// A comment before the move. Only written for the first move of a line.
+    /// A comment before the move. Only written for the first move of a variation; before the
+    /// first move of the main line it is the game's [`Game::comment`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starting_comment: Option<String>,
     /// The comment after the move, without the `[%eval]` command.
@@ -133,6 +137,7 @@ pub fn read_games(
     let mut reader = Reader::new(reader);
     let mut builder = GameBuilder { index: 0 };
     while let Some(result) = reader.read_game(&mut builder)? {
+        // A chunk without tags or moves, such as a file comment before the first game, isn't one.
         if matches!(&result, Ok(game) if game.game.headers.is_empty() && game.game.moves.is_empty())
         {
             continue;
@@ -411,11 +416,18 @@ impl Visitor for GameBuilder {
         while movetext.stack.len() > 1 {
             let _ = self.end_variation(&mut movetext);
         }
-        let main = movetext.stack.pop().expect("the main line is never popped");
+        let mut main = movetext.stack.pop().expect("the main line is never popped");
+        // A comment before the first move (or in a game without moves) is about the starting
+        // position.
+        let comment = match main.moves.first_mut() {
+            Some(first) => first.starting_comment.take(),
+            None => main.pending_comment.take(),
+        };
         Ok(ImportedGame {
             game: Game {
                 headers: movetext.headers,
                 start_fen: movetext.start_fen,
+                comment,
                 moves: main.moves,
             },
             warnings: movetext.warnings,
@@ -503,6 +515,9 @@ pub fn write(game: &Game) -> Result<String, String> {
     out.push('\n');
 
     let mut text = MovetextWriter::default();
+    if let Some(comment) = &game.comment {
+        text.comment(comment);
+    }
     write_line(&mut text, &start, &game.moves)?;
     text.token(tag("Result").filter(|v| !v.is_empty()).unwrap_or("*"));
     out.push_str(&text.out);
@@ -677,8 +692,9 @@ mod tests {
             ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6"]
         );
 
+        assert_eq!(game.comment.as_deref(), Some("A quiet start."));
         let e4 = &game.moves[0];
-        assert_eq!(e4.starting_comment.as_deref(), Some("A quiet start."));
+        assert_eq!(e4.starting_comment, None);
         assert_eq!(e4.eval, Some(Score::Cp(30)));
         assert_eq!(e4.comment, None);
         assert_eq!(e4.uci, "e2e4");
@@ -785,6 +801,19 @@ mod tests {
         let mut game = only_game("1. e4 e5 *").game;
         game.moves[1].san = "Ke7".into();
         assert!(write(&game).unwrap_err().contains("1... Ke7"));
+    }
+
+    #[test]
+    fn keeps_comments_and_shapes_on_the_starting_position() {
+        let game = only_game("{ [%cal Ge2e4] Start here. } *").game;
+        assert!(game.moves.is_empty());
+        assert_eq!(game.comment.as_deref(), Some("[%cal Ge2e4] Start here."));
+        let written = write(&game).unwrap();
+        assert!(
+            written.ends_with("\n{ [%cal Ge2e4] Start here. } *\n"),
+            "{written}"
+        );
+        assert_eq!(only_game(&written).game.comment, game.comment);
     }
 
     #[test]

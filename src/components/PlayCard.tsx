@@ -28,7 +28,7 @@ const SMALL_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-xl px-3 text-[13px] font-bold whitespace-nowrap transition-colors disabled:opacity-50";
 const PRIMARY = `${SMALL_BUTTON} bg-blush-400 text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] hover:bg-blush-300`;
 const SECONDARY = `${SMALL_BUTTON} bg-blush-100 text-ink hover:bg-blush-200`;
-const DANGER = `${SMALL_BUTTON} bg-rose text-white hover:bg-rose-strong`;
+const DANGER = `${SMALL_BUTTON} bg-rose text-snow hover:bg-rose-strong`;
 
 type AnyGame = EngineGame | OnlineGame;
 
@@ -410,7 +410,7 @@ function PlayerRow(props: {
   const toMove = () => props.game.playing() && props.game.turn() === props.side;
   const low = () => (time() ?? Number.POSITIVE_INFINITY) < LOW_TIME_MS;
   const clockColors = () => {
-    if (running()) return low() ? "bg-rose text-white" : "bg-plum text-white";
+    if (running()) return low() ? "bg-rose text-snow" : "bg-plum text-snow";
     return `bg-white ring-1 ring-blush-200 ${low() ? "text-rose-strong" : "text-ink"}`;
   };
 
@@ -423,7 +423,9 @@ function PlayerRow(props: {
       <span
         aria-hidden="true"
         class={`size-3 shrink-0 rounded-[3px] ${
-          props.side === "w" ? "border-[1.5px] border-plum bg-white" : "bg-plum"
+          props.side === "w"
+            ? "border-[1.5px] border-plum bg-snow"
+            : "bg-plum dark:ring-1 dark:ring-snow/40"
         }`}
       />
       <span class="truncate text-[14px] font-bold">{props.name}</span>

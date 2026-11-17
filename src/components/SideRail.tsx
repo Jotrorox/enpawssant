@@ -5,8 +5,8 @@ import {
   DatabaseIcon,
   EngineIcon,
   FolderIcon,
+  GearIcon,
   PuzzleIcon,
-  SunIcon,
 } from "./Icons";
 
 export type Section = "board" | "play" | "database" | "engines" | "puzzles" | "files";
@@ -23,6 +23,7 @@ const SECTIONS: { id: Section; label: string; icon: () => JSX.Element }[] = [
 export function SideRail(props: {
   active: Section;
   onSelect: (section: Section) => void;
+  onSettings: () => void;
   /** Things waiting in a section, such as challenges and games where it's the user's turn. */
   badges?: Partial<Record<Section, number>>;
 }) {
@@ -50,7 +51,7 @@ export function SideRail(props: {
             {section.icon()}
             <Show when={props.badges?.[section.id]}>
               {(count) => (
-                <span class="absolute -top-0.5 -right-0.5 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-rose px-1 text-[11px] leading-none font-bold text-white">
+                <span class="absolute -top-0.5 -right-0.5 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-rose px-1 text-[11px] leading-none font-bold text-snow">
                   {count()}
                 </span>
               )}
@@ -62,9 +63,10 @@ export function SideRail(props: {
         type="button"
         title="Settings"
         aria-label="Settings"
+        onClick={() => props.onSettings()}
         class="mt-auto grid size-[44px] place-items-center rounded-2xl text-ink/80 hover:bg-blush-100 hover:text-ink"
       >
-        <SunIcon class="size-[22px]" />
+        <GearIcon class="size-[22px]" />
       </button>
     </nav>
   );

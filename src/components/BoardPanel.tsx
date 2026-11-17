@@ -1,4 +1,5 @@
 import { createSignal, For, Index, Show } from "solid-js";
+import type { Shape } from "../chess/annotations";
 import type { Arrow, Color, Square } from "../chess/board";
 import type { ReviewProgress } from "../chess/engine";
 import type { ReviewNag } from "../chess/review";
@@ -36,8 +37,12 @@ type BoardPanelProps = {
   evals: (Score | undefined)[];
   lastMove?: { from: Square; to: Square };
   arrows?: Arrow[];
+  /** Circles and arrows drawn on the position; see `Board`. */
+  shapes?: Shape[];
+  onShapesChange?: (shapes: Shape[]) => void;
   orientation: Color;
   onFlip: () => void;
+  onEditPosition: () => void;
   onPly: (ply: number) => void;
   /** Without it the board takes no moves, e.g. while the engine is to move. */
   onMove?: (move: MoveInput) => void;
@@ -82,6 +87,8 @@ export function BoardPanel(props: BoardPanelProps) {
               orientation={props.orientation}
               lastMove={props.lastMove}
               arrows={props.arrows}
+              shapes={props.shapes}
+              onShapesChange={props.onShapesChange}
               onMove={props.onMove}
               premove={props.premove}
               sound={soundEnabled()}
@@ -95,6 +102,7 @@ export function BoardPanel(props: BoardPanelProps) {
         maxPly={props.maxPly}
         fen={props.fen}
         onFlip={props.onFlip}
+        onEditPosition={props.onEditPosition}
         onPly={props.onPly}
         onImport={props.onImport}
         onExport={props.onExport}
@@ -124,10 +132,13 @@ function GameHeader(props: { info: GameInfo }) {
   return (
     <div class="mb-1 flex min-h-[30px] items-center gap-3">
       <h1 class="flex min-w-0 items-center gap-2 text-[15px] whitespace-nowrap">
-        <span class="size-3 rounded-[3px] border-[1.5px] border-plum bg-white" aria-hidden="true" />
+        <span class="size-3 rounded-[3px] border-[1.5px] border-plum bg-snow" aria-hidden="true" />
         <PlayerName player={props.info.white} />
         <span class="px-1 text-ink/60">vs</span>
-        <span class="size-3 rounded-[3px] bg-plum" aria-hidden="true" />
+        <span
+          class="size-3 rounded-[3px] bg-plum dark:ring-1 dark:ring-snow/40"
+          aria-hidden="true"
+        />
         <PlayerName player={props.info.black} />
       </h1>
       <Show when={props.info.eco || props.info.opening}>
@@ -161,7 +172,7 @@ function EvalBar(props: { score?: Score; orientation: Color }) {
     <div
       role="img"
       aria-label={props.score ? `Evaluation ${formatScore(props.score)}` : "No evaluation yet"}
-      class={`relative mt-[30px] flex w-[22px] shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-blush-200 ${
+      class={`relative mt-[30px] flex w-[22px] shrink-0 overflow-hidden rounded-full bg-snow ring-1 ring-blush-200 ${
         blackOnTop() ? "flex-col" : "flex-col-reverse"
       }`}
     >
@@ -172,7 +183,7 @@ function EvalBar(props: { score?: Score; orientation: Color }) {
       <span
         aria-hidden="true"
         class={`w-full text-center font-mono text-[8.5px] leading-[1.8] tracking-tighter ${
-          share() >= 0.5 ? "text-ink" : "text-ink/60"
+          share() >= 0.5 ? "text-plum" : "text-plum/60"
         }`}
       >
         {props.score ? barLabel(props.score) : "…"}
@@ -186,6 +197,7 @@ function BoardToolbar(props: {
   maxPly: number;
   fen: string;
   onFlip: () => void;
+  onEditPosition: () => void;
   onPly: (ply: number) => void;
   onImport: () => void;
   onExport: () => void;
@@ -228,7 +240,7 @@ function BoardToolbar(props: {
       <IconButton label="Flip board" onClick={() => props.onFlip()}>
         <FlipIcon />
       </IconButton>
-      <IconButton label="Edit position">
+      <IconButton label="Edit position" onClick={() => props.onEditPosition()}>
         <PencilIcon />
       </IconButton>
       <IconButton
@@ -395,7 +407,7 @@ function EvalGraph(props: {
               <span class="rounded-full bg-blush-100 px-2.5 py-px font-bold">
                 {props.info.white.name} {Math.round(accuracy().white)}
               </span>
-              <span class="rounded-full bg-plum px-2.5 py-px font-bold text-white">
+              <span class="rounded-full bg-plum px-2.5 py-px font-bold text-snow">
                 {props.info.black.name} {Math.round(accuracy().black)}
               </span>
             </>
@@ -419,7 +431,7 @@ function EvalGraph(props: {
         <svg
           viewBox={`0 0 100 ${HEIGHT}`}
           preserveAspectRatio="none"
-          class="absolute inset-0 size-full overflow-hidden rounded-[10px] bg-blush-100"
+          class="absolute inset-0 size-full overflow-hidden rounded-[10px] bg-eval-light"
           role="img"
           aria-label="Evaluation over the game"
         >
@@ -483,7 +495,7 @@ function EvalGraph(props: {
         <Show when={current()}>
           {(score) => (
             <span
-              class="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose"
+              class="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-snow bg-rose"
               style={{
                 left: `${x(props.ply)}%`,
                 top: `${(y(score()) / HEIGHT) * 100}%`,

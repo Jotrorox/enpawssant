@@ -275,3 +275,26 @@ export function PawIcon(props: IconProps) {
     </svg>
   );
 }
+
+export const GearIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" />
+    <circle cx="12" cy="12" r="6.6" />
+  </Stroke>
+);
+
+export const HandIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11" />
+    <path d="M11 10.5V4a1.5 1.5 0 0 1 3 0v6.5" />
+    <path d="M14 10.5V5.5a1.5 1.5 0 0 1 3 0V14a6.5 6.5 0 0 1-6.5 6.5h-.6a6 6 0 0 1-4.6-2.2L3.6 15.4a1.6 1.6 0 0 1 2.4-2.1L8 15" />
+  </Stroke>
+);
+
+export const EraserIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M8.5 20 3.9 15.4a1.5 1.5 0 0 1 0-2.1l9.4-9.4a1.5 1.5 0 0 1 2.1 0l4.7 4.7a1.5 1.5 0 0 1 0 2.1L11 20z" />
+    <path d="M8.5 20H20M8.4 8.8l6.8 6.8" />
+  </Stroke>
+);

@@ -185,6 +185,8 @@ export function Modal(props: {
   title: string;
   onClose: () => void;
   children: JSX.Element;
+  /** The dialog's largest width in px. */
+  width?: number;
 }) {
   let dialog!: HTMLDialogElement;
   createEffect(() => {
@@ -200,7 +202,8 @@ export function Modal(props: {
       onClose={() => props.onClose()}
       // Clicks on the backdrop land on the dialog element itself.
       onClick={(event) => event.target === dialog && dialog.close()}
-      class="m-auto w-[min(640px,calc(100vw-32px))] rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30"
+      style={{ width: `min(${props.width ?? 640}px, calc(100vw - 32px))` }}
+      class="m-auto rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30"
     >
       <div class="flex max-h-[calc(100vh-64px)] flex-col gap-3 p-5">
         <div class="flex items-center">

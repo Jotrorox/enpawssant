@@ -9,8 +9,11 @@ import {
   openPgnFile,
   type ParsedPgn,
   parsePgn,
+  pgnFileName,
+  type SavedPgn,
   savePgnFile,
 } from "../chess/pgn";
+import { checkPosition, looksLikeFen } from "../chess/setup";
 import { type GameSession, gameTitle } from "../game/session";
 import { CheckIcon, CopyIcon, DatabaseIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
 import { type FetchedGames, OnlineImport } from "./OnlineImport";
@@ -39,6 +42,8 @@ type ImportDialogProps = {
    * fetched from a site, so the board can face their way.
    */
   onOpen: (games: ImportedGame[], player?: string) => void;
+  /** Opens a pasted FEN, already checked, on a new board. */
+  onOpenPosition: (fen: string) => void;
 };
 
 /** Games to pick from, and where they came from. */
@@ -121,8 +126,8 @@ function ImportContent(props: ImportDialogProps) {
             <textarea
               value={text()}
               onInput={(event) => setText(event.currentTarget.value)}
-              placeholder={'[Event "Sunday nap"]\n\n1. e4 e5 2. Nf3 Nc6 *'}
-              aria-label="PGN text"
+              placeholder={'Paste a PGN or a FEN\n\n[Event "Sunday nap"]\n\n1. e4 e5 2. Nf3 Nc6 *'}
+              aria-label="PGN or FEN"
               spellcheck={false}
               class="selectable h-56 resize-none rounded-xl border border-blush-200 bg-white p-3 font-mono text-[12px] leading-relaxed outline-none placeholder:text-ink/50 focus:border-rose"
             />
@@ -151,7 +156,19 @@ function ImportContent(props: ImportDialogProps) {
                 type="button"
                 class={`${PRIMARY_BUTTON} ml-auto`}
                 disabled={busy() || text().trim() === ""}
-                onClick={() => run(() => parsePgn(text()))}
+                onClick={() => {
+                  if (!looksLikeFen(text())) {
+                    void run(() => parsePgn(text()));
+                    return;
+                  }
+                  checkPosition(text()).then(
+                    (fen) => {
+                      props.onOpenPosition(fen);
+                      props.onClose();
+                    },
+                    (e) => setError(errorMessage(e)),
+                  );
+                }}
               >
                 <ImportIcon class="size-[18px]" />
                 Import
@@ -315,7 +332,11 @@ function GameRow(props: { game: ImportedGame; onOpen: () => void }) {
 type ExportDialogProps = {
   open: boolean;
   session?: GameSession;
+  /** The game's title, for the suggested file name. */
+  title?: string;
   onClose: () => void;
+  /** Called after saving, so later saves can go to the same file. */
+  onSaved: (saved: SavedPgn) => void;
 };
 
 export function ExportDialog(props: ExportDialogProps) {
@@ -345,8 +366,11 @@ export function ExportDialog(props: ExportDialogProps) {
     if (!session) return;
     const game = session.toPgn();
     try {
-      const name = await savePgnFile(game, `${fileSafe(gameTitle(game))}.pgn`);
-      if (name) setStatus({ ok: true, message: `Saved ${name}.` });
+      const saved = await savePgnFile(game, pgnFileName(props.title ?? gameTitle(game)));
+      if (saved) {
+        setStatus({ ok: true, message: `Saved ${saved.name}.` });
+        props.onSaved(saved);
+      }
     } catch (e) {
       setStatus({ ok: false, message: `Could not save: ${errorMessage(e)}` });
     }
@@ -402,9 +426,4 @@ export function ExportDialog(props: ExportDialogProps) {
       </div>
     </Modal>
   );
-}
-
-/** A file name without characters that file systems reject. */
-function fileSafe(name: string): string {
-  return name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "game";
 }

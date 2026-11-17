@@ -6,6 +6,7 @@ mod engines;
 mod explorer;
 mod files;
 mod lichess;
+mod menu;
 mod online;
 mod pgn;
 mod puzzles;
@@ -111,6 +112,11 @@ pub fn run() {
         .manage(Database::default())
         .manage(Puzzles::default())
         .manage(Blunders::default())
+        .manage(menu::AppMenu::default())
+        .setup(|app| {
+            menu::install(app.handle())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             engine_info,
             engine_analyze,
@@ -129,6 +135,9 @@ pub fn run() {
             pgn::pgn_export,
             pgn::pgn_open_file,
             pgn::pgn_save_file,
+            pgn::pgn_write_path,
+            pgn::position_check,
+            menu::menu_set_recent,
             files::files_places,
             files::files_list,
             files::files_pick_folder,

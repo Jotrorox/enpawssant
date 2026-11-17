@@ -1,14 +1,15 @@
+import { type PieceSet, settings } from "../settings";
 import type { Piece, PieceType } from "./board";
 
-const URLS = import.meta.glob<string>("../assets/pieces/*.svg", {
+const URLS = import.meta.glob<string>("../assets/pieces/*/*.svg", {
   eager: true,
   query: "?url",
   import: "default",
 });
 
-/** URL of the SVG image for a piece. */
-export function pieceUrl(piece: Piece): string {
-  return URLS[`../assets/pieces/${piece.color}${piece.type.toUpperCase()}.svg`];
+/** URL of the SVG image for a piece, in the chosen piece set unless `set` is given. */
+export function pieceUrl(piece: Piece, set: PieceSet = settings.pieceSet): string {
+  return URLS[`../assets/pieces/${set}/${piece.color}${piece.type.toUpperCase()}.svg`];
 }
 
 export const PIECE_NAMES: Record<PieceType, string> = {

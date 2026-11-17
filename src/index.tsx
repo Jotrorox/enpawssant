@@ -11,5 +11,8 @@ import "@fontsource/jetbrains-mono/400.css";
 import "./styles.css";
 
 import App from "./App";
+import { applyAppearance } from "./appearance";
+
+applyAppearance();
 
 render(() => <App />, document.getElementById("root") as HTMLElement);

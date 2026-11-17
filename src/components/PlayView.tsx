@@ -620,7 +620,7 @@ function OngoingCard(props: { onOpenGame: (game: { id: string; color?: Color }) 
       <div class="flex items-center gap-2">
         <CardTitle>Ongoing games</CardTitle>
         <Show when={myTurns() > 0}>
-          <span class="rounded-full bg-rose px-2 py-px text-[12px] font-bold text-white">
+          <span class="rounded-full bg-rose px-2 py-px text-[12px] font-bold text-snow">
             {myTurns()} your turn
           </span>
         </Show>
@@ -668,7 +668,9 @@ function OngoingRow(props: {
         <span
           aria-hidden="true"
           class={`size-3 shrink-0 rounded-[3px] ${
-            game().color === "white" ? "border-[1.5px] border-plum bg-white" : "bg-plum"
+            game().color === "white"
+              ? "border-[1.5px] border-plum bg-snow"
+              : "bg-plum dark:ring-1 dark:ring-snow/40"
           }`}
         />
         <div class="min-w-0 flex-1">
@@ -690,7 +692,7 @@ function OngoingRow(props: {
         </Show>
         <span
           class={`shrink-0 rounded-full px-2 py-px text-[12px] font-bold ${
-            game().isMyTurn ? "bg-rose text-white" : "bg-white text-muted ring-1 ring-blush-200"
+            game().isMyTurn ? "bg-rose text-snow" : "bg-white text-muted ring-1 ring-blush-200"
           }`}
         >
           {game().isMyTurn ? "Your turn" : "Their turn"}

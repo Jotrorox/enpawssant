@@ -28,11 +28,19 @@ import { formatScore, type GameResult, type Score, shareFor } from "../chess/sco
 import type { OnlineGame } from "../game/online";
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
+import { AnnotationCard } from "./AnnotationCard";
 import { CatIcon } from "./Icons";
 import { NamesForm } from "./MyNames";
 import { type BestMoveHint, Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
+
+type PanelTab = "analysis" | "annotate";
+
+const PANEL_TABS = [
+  { value: "analysis", label: "Analysis" },
+  { value: "annotate", label: "Annotate" },
+] as const;
 
 /** A game in progress in another tab, which fair-play mode points back to. */
 export type LiveGame = { title: string; onShow: () => void };
@@ -68,6 +76,7 @@ type AnalysisPanelProps = {
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
   const fen = () => props.session.node().fen;
+  const [tab, setTab] = createSignal<PanelTab>("analysis");
   // Lives here rather than in the engine card so hiding the card during a game doesn't ask the
   // engine again. Asking again after the engine restarts with new options picks up its settings.
   const [engine] = createResource(
@@ -77,32 +86,47 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
 
   return (
     <div class="flex min-h-0 min-w-0 flex-col gap-3 pt-3.5 pr-3.5 pb-3.5">
-      <Show when={props.game}>
-        {(game) => (
-          <PlayCard
-            session={props.session}
-            game={game()}
-            onNewGame={props.onNewGame}
-            onAnalyse={props.onAnalyse}
-          />
-        )}
-      </Show>
-      {/* No help from the engine or the explorer while a game is on, in any tab. */}
-      <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>
-      <Show when={!props.fairPlay}>
-        <EngineCard
-          engine={engine}
-          engineId={props.primary.id}
-          fen={fen()}
-          analysis={props.primary.analysis}
-          enabled={props.engineOn}
-          error={props.primary.error}
-          secondary={props.secondary}
-          onToggle={props.onToggleEngine}
-        />
-        <ExplorerCard session={props.session} />
-      </Show>
-      <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
+      <Segmented
+        label="Panels"
+        options={PANEL_TABS}
+        value={tab()}
+        onChange={setTab}
+        class="shrink-0 border border-blush-200/80 bg-blush-100/80"
+      />
+      <Switch>
+        <Match when={tab() === "annotate"}>
+          <AnnotationCard session={props.session} />
+          <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
+        </Match>
+        <Match when={tab() === "analysis"}>
+          <Show when={props.game}>
+            {(game) => (
+              <PlayCard
+                session={props.session}
+                game={game()}
+                onNewGame={props.onNewGame}
+                onAnalyse={props.onAnalyse}
+              />
+            )}
+          </Show>
+          {/* No help from the engine or the explorer while a game is on, in any tab. */}
+          <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>
+          <Show when={!props.fairPlay}>
+            <EngineCard
+              engine={engine}
+              engineId={props.primary.id}
+              fen={fen()}
+              analysis={props.primary.analysis}
+              enabled={props.engineOn}
+              error={props.primary.error}
+              secondary={props.secondary}
+              onToggle={props.onToggleEngine}
+            />
+            <ExplorerCard session={props.session} />
+          </Show>
+          <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
+        </Match>
+      </Switch>
     </div>
   );
 }
@@ -165,7 +189,7 @@ function EngineCard(props: EngineCardProps) {
           }`}
         >
           <span
-            class={`absolute top-[3px] left-[3px] size-[14px] rounded-full bg-white shadow transition-transform ${
+            class={`absolute top-[3px] left-[3px] size-[14px] rounded-full bg-snow shadow transition-transform ${
               props.enabled ? "translate-x-[14px]" : ""
             }`}
           />
@@ -737,10 +761,10 @@ function ExplorerRowView(props: ExplorerRowProps) {
         )}
       </Show>
       <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 ${cell()}`}>
-        <div class="flex h-[22px] overflow-hidden rounded-full bg-white text-[11px] font-bold ring-1 ring-blush-200">
-          <ResultSegment percent={shares().white} class="text-ink" />
+        <div class="flex h-[22px] overflow-hidden rounded-full bg-snow text-[11px] font-bold ring-1 ring-blush-200">
+          <ResultSegment percent={shares().white} class="text-plum" />
           <ResultSegment percent={shares().draw} class="bg-plum-soft text-ink" />
-          <ResultSegment percent={shares().black} class="bg-plum text-white" />
+          <ResultSegment percent={shares().black} class="bg-plum text-snow" />
         </div>
       </td>
     </tr>

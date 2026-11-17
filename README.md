@@ -6,7 +6,9 @@ A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, Solid
 > every position live, games can be imported and exported as PGN or fetched from Lichess and
 > Chess.com, kept in a local game database and explored by position, you can play against
 > Stockfish with a clock or on lichess.org, and there are puzzles from the Lichess puzzle database
-> and from your own blunders.
+> and from your own blunders. Games can be annotated, any position can be set up in the board
+> editor, and the app has a settings screen, a light and a dark theme, and a native menu bar on
+> macOS.
 
 ## The board
 
@@ -17,6 +19,8 @@ en passant, promotion, check and SAN) lives in `src/chess/rules.ts`.
 - Pieces lift under the pointer, glide between squares and land with a little squash and ripple.
   Captures burst, promotions sparkle, a checked king wobbles and a checkmated one tips over.
 - Right-click or right-drag to draw circles and arrows (hold Shift, Alt or both for other colours).
+  They belong to the position they were drawn on and are saved with the game (see
+  [Annotating](#annotating)); drawing the same shape again removes it.
 - Sounds are synthesised with Web Audio (wooden knocks, a collar-bell "ting" for check, chimes for
   promotion and mate), timed to the moment a piece lands. Mute them from the board toolbar.
 - Animations respect the system's reduced-motion setting.
@@ -24,7 +28,8 @@ en passant, promotion, check and SAN) lives in `src/chess/rules.ts`.
 ## Live analysis
 
 Stockfish runs as one long-lived process for the whole session and analyses whatever position is on
-the board (`go infinite`, three lines with MultiPV). Rust parses its output, converts the lines to
+the board (`go infinite`, three lines with MultiPV by default; one to five in the settings). Rust
+parses its output, converts the lines to
 SAN with `chess-core` (shakmaty) and streams snapshots, at most ten per second and with scores from
 White's point of view, to the frontend over a Tauri channel. They drive the eval bar, the top lines,
 the arrows, depth and speed, and the eval graph for every ply analysed so far.
@@ -150,8 +155,14 @@ game away: it becomes a variation.
   the eval bar and graph for positions the engine hasn't analysed yet.
 - **Import games** also fetches your games from **Lichess** or **Chess.com** (see below).
 - **Export PGN** shows the game as PGN to copy or save, including variations, comments and NAGs.
-- Open tabs are saved as you go (games, variations, comments and the current position) and reopen
-  on the next launch. With nothing to restore, the app starts on an empty board.
+- **Save** (⌘S / Ctrl S) writes the game back to its file: the one it was saved to before, or the
+  file it was opened from when that file held only this game. Otherwise, and with **Save As…**
+  (⇧⌘S / Ctrl Shift S), it asks where to save. Rust only replaces a file that still holds a single
+  game that reads cleanly, so a file with several games is never overwritten with one; if the file
+  has changed like that, Save asks where to save instead.
+- Open tabs are saved as you go (games, variations, comments, NAGs, drawn arrows, the current
+  position, which way the board is turned and the file each game belongs to) and reopen on the next
+  launch. With nothing to restore, the app starts on an empty board.
 
 PGN parsing and writing happen in Rust (`crates/chess-core/src/pgn.rs`, built on `shakmaty` and
 `pgn-reader`). File dialogs are opened from Rust too, so the frontend needs no file system or dialog
@@ -173,6 +184,61 @@ between two dates (up to 200 at a time). Only standard chess is fetched, no vari
   which needs no login. It serves games a month at a time, so they are collected month by month,
   newest first, one request after another as Chess.com asks.
 - Clock times (`[%clk]`) are kept in the PGN but not shown in the move list.
+
+## Annotating
+
+The **Annotate** panel (next to Analysis) edits the current move:
+
+- a **comment**, written into the PGN after the move. At the starting position it becomes the
+  comment before the first move. Commands such as `[%clk]` in imported comments are kept as they are.
+- the **move** annotation (!!, !, !?, ?!, ?, ??), one **position** assessment (=, ∞, ⩲, ⩱, ±, ∓,
+  +−, −+) and any number of **ideas** (□ only move, N novelty, ⟳ development, ↑ initiative,
+  → attack, ⇆ counterplay, =∞ compensation, ∆ with the idea, ⨀ zugzwang, ⊕ time trouble). They
+  are stored as standard NAGs; side-specific ones use the code for the side that moved.
+- the circles and arrows drawn on the board, stored as `[%csl Gd4]` and `[%cal Ge2e4,Rd7d5]` in the
+  comment (green, red, blue and yellow), the format lichess and ChessBase use. Imported games show
+  their drawings on the board too.
+
+## Setting up positions
+
+**Edit position** (the pencil in the board toolbar, ⌘E / Ctrl E) opens the board editor on the
+current position. Drag pieces around (off the board to remove them), pick a piece to place it with a
+click (or by sweeping across squares), use the eraser, or right-click a square to clear it. Set the
+side to move, castling rights (only offered when king and rook are at home), the en passant square
+(only offered when a capture is possible) and the move number, or paste a FEN. Rust checks the
+position with shakmaty (two kings, no pawns on the back ranks, the side not to move isn't in check)
+before **Analyse this position** opens it on a new board, or on the current one if it is still empty.
+
+A FEN can also be pasted into **Import PGN or FEN…** (⇧⌘O / Ctrl Shift O).
+
+## Settings
+
+The ⚙ button at the bottom of the side rail (⌘, / Ctrl ,) opens the settings:
+
+- **Theme**: follow the system, or always light or dark.
+- **Board**: six colour themes (Blush, Mint, Lavender, Sky, Tabby, Tuxedo).
+- **Pieces**: Classic (cburnett), Chessnut, Fantasy or Spatial.
+- **Volume** of the move sounds, next to the mute switch the board toolbar also has.
+- **Analysis engine**: the number of lines, and the threads and hash of the engine that analyses
+  the board. Threads and hash are that engine's options (the Engines section has all of them); the
+  others live in local storage.
+
+## Menus and shortcuts
+
+On macOS the app has a native menu bar (File, Edit, Board, View, Window), and File › Open Recent
+lists the recently opened files. On Windows the same shortcuts work with Ctrl instead of ⌘.
+
+| Shortcut | Command                   | Shortcut  | Command                  |
+| -------- | ------------------------- | --------- | ------------------------ |
+| ⌘N       | New board                 | ⇧⌘F       | Flip board               |
+| ⌘O       | Open PGN…                 | ⌘E        | Edit position…           |
+| ⇧⌘O      | Import PGN or FEN…        | ⌘L        | Engine analysis on/off   |
+| ⌘S       | Save                      | ⇧⌘L       | Analyze full game        |
+| ⇧⌘S      | Save As…                  | ⌘1 … ⌘6   | Show a side-rail section |
+| ⇧⌘E      | Export PGN…               | ⌘K        | Search games             |
+| ⌘D       | Save to the game database | ⌘,        | Settings                 |
+| ⌘W       | Close tab                 | ⇧⌘[ / ⇧⌘] | Previous / next tab      |
+| ⇧⌘C      | Copy FEN                  | ←/→, ↑/↓  | Step through moves       |
 
 ## Opening explorer
 
@@ -200,7 +266,8 @@ with how often each was played and how those games ended.
 
 ## Files
 
-The **Files** section lists recently opened PGN files and has a folder browser that shows only
+The **Files** section lists recently opened (and saved) PGN files, which macOS also shows under
+File › Open Recent, and has a folder browser that shows only
 folders and `.pgn` files. Choosing a file lists its games: open one, open them all, or add the whole
 file to the game database. PGN files can be dropped anywhere on the window: they open (with a game
 picker for several games), or are imported when the Database section is showing. The browser goes
@@ -345,14 +412,14 @@ notarization enabled, both the app and the `.dmg` are notarized and stapled. See
 ├── mise.toml               # Node/pnpm versions and project tasks
 ├── biome.json              # TS/JSON lint + format config
 ├── crates/
-│   └── chess-core/         # Chess logic, PGN, opening names, position keys and puzzles, independent of Tauri
+│   └── chess-core/         # Chess logic, PGN, opening names, position keys and checks, puzzles; no Tauri
 ├── scripts/
 │   ├── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 │   └── release.mjs         # Version bump + tag (`mise run release`)
 ├── src/                    # SolidJS + TypeScript frontend
-│   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
+│   ├── assets/pieces/      # Piece sets: cburnett, Chessnut, Fantasy, Spatial (licences in the README there)
 │   ├── chess/              # Board helpers, rules, game endings, move tree, PGN, engines, database, puzzles
-│   ├── components/         # Board, panels and the side-rail sections (Play, Database, Engines, …)
+│   ├── components/         # Board, panels, dialogs (settings, board editor) and the side-rail sections
 │   └── game/               # Game sessions, games against Stockfish and on Lichess, clocks
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
@@ -366,8 +433,9 @@ notarization enabled, both the app and the `.dmg` are notarized and stapled. See
     │   ├── explorer.rs     # Opening explorer and opening name commands
     │   ├── files.rs        # File browser: places, folder listings, reading PGN files
     │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
+    │   ├── menu.rs         # Native menu bar (macOS); menu choices become frontend commands
     │   ├── online.rs       # Fetching a player's games from Lichess and Chess.com
-    │   ├── pgn.rs          # PGN import/export commands and file dialogs
+    │   ├── pgn.rs          # PGN import/export/save commands, file dialogs, position checks
     │   ├── puzzles.rs      # Puzzles: starter pack, rating, streaks, full database download, your own
     │   ├── store.rs        # SQLite files in the app data folder
     │   └── lib.rs          # Tauri setup and commands
@@ -381,5 +449,6 @@ backend through Tauri commands such as `engine_analyze` and `pgn_parse`.
 
 BSD 3-Clause, see [LICENSE](LICENSE). Stockfish is downloaded separately and is licensed under the GPLv3.
 The opening names come from [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings)
-(CC0) and the puzzles from the [Lichess puzzle database](https://database.lichess.org/#puzzles) (CC0). The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
-[src/assets/pieces/README.md](src/assets/pieces/README.md).
+(CC0) and the puzzles from the [Lichess puzzle database](https://database.lichess.org/#puzzles) (CC0). The default chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license;
+the other piece sets are Alexis Luengas's "Chessnut" (Apache 2.0) and Maurizio Monge's "Fantasy"
+and "Spatial" (MIT). See [src/assets/pieces/README.md](src/assets/pieces/README.md).

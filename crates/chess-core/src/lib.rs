@@ -7,6 +7,7 @@ pub mod index;
 pub mod openings;
 pub mod pgn;
 pub mod puzzle;
+pub mod setup;
 pub mod uci;
 
 use std::fmt;

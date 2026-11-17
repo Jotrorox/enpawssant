@@ -3,7 +3,9 @@
 
 import { batch, createMemo, createRoot, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
-import { type Nag, toggleQualityNag } from "../chess/nag";
+import { parseComment, type Shape, withCommentText, withShapes } from "../chess/annotations";
+import { fenTurn } from "../chess/board";
+import { type Nag, type NagChoice, toggleNagChoice, toggleQualityNag } from "../chess/nag";
 import { header, type PgnGame } from "../chess/pgn";
 import {
   type Accuracy,
@@ -134,6 +136,29 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       setTree("nodes", id, "nags", (nags) => toggleQualityNag(nags, nag));
     };
 
+    /** Toggles a position assessment or remark on the current move. */
+    const toggleNagFor = (choice: NagChoice) => {
+      const id = currentId();
+      if (id === tree.rootId) return;
+      // The FEN after the move has the other side to move.
+      const mover = fenTurn(tree.nodes[id].fen) === "w" ? "b" : "w";
+      setTree("nodes", id, "nags", (nags) => toggleNagChoice(nags, choice, mover));
+    };
+
+    /** Circles and arrows drawn on the current position, stored in its comment. */
+    const shapes = createMemo(() => parseComment(node().comment).shapes);
+
+    const setShapes = (next: Shape[]) => {
+      const id = currentId();
+      setTree("nodes", id, "comment", (comment) => withShapes(comment, next));
+    };
+
+    /** Sets the text of a node's comment (the current one by default), keeping its shapes. */
+    const setComment = (text: string, id: NodeId = currentId()) => {
+      if (!tree.nodes[id]) return;
+      setTree("nodes", id, "comment", (comment) => withCommentText(comment, text));
+    };
+
     /** Deletes a move and everything after it. */
     const remove = (id: NodeId) => {
       const target = tree.nodes[id];
@@ -187,6 +212,10 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       playFrom,
       setHeader,
       toggleNag,
+      toggleNagFor,
+      shapes,
+      setShapes,
+      setComment,
       review,
       remove,
       promote,

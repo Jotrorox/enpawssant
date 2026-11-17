@@ -58,7 +58,7 @@ pub fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn is_pgn(path: &Path) -> bool {
+pub fn is_pgn(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pgn"))
 }

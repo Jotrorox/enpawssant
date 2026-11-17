@@ -1,5 +1,6 @@
 // Keeps the open tabs between launches, so the app reopens where the user left off. Games are
-// stored in the same PGN shape the importer produces, with the current position as an index path.
+// stored in the same PGN shape the importer produces (so variations, comments, NAGs and drawn
+// arrows come back too), with the current position as an index path.
 
 import type { PgnGame } from "../chess/pgn";
 
@@ -12,6 +13,10 @@ export type SavedTab = {
   game: PgnGame;
   /** The current position as an `indexPath` into the game's move tree. */
   position: number[];
+  /** The side at the bottom of the board; White when missing. */
+  orientation?: "w" | "b";
+  /** The PGN file the game was opened from or saved to, which Save writes to. */
+  path?: string;
   /** The Lichess game played in the tab, so it can reconnect. */
   lichessId?: string;
 };
@@ -65,6 +70,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function isSavedTab(value: unknown): value is SavedTab {
   if (!isRecord(value) || typeof value.title !== "string") return false;
   if (!Array.isArray(value.position) || !value.position.every(Number.isInteger)) return false;
+  if (value.orientation !== undefined && value.orientation !== "w" && value.orientation !== "b") {
+    return false;
+  }
+  if (value.path !== undefined && typeof value.path !== "string") return false;
   if (value.lichessId !== undefined && typeof value.lichessId !== "string") return false;
   const game = value.game;
   return (

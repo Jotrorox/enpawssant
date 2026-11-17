@@ -19,7 +19,7 @@ import type { GameSession } from "../game/session";
 import { PromoteIcon, TrashIcon } from "./Icons";
 import { Card, CardTitle } from "./ui";
 
-const NAG_STYLES: Record<Nag, { text: string; label: string }> = {
+export const NAG_STYLES: Record<Nag, { text: string; label: string }> = {
   "!!": { text: "text-nag-brilliant", label: "Brilliant move" },
   "!": { text: "text-nag-good", label: "Good move" },
   "!?": { text: "text-nag-interesting", label: "Interesting move" },
@@ -79,6 +79,9 @@ function layout(tree: GameTree): Block[] {
   let tokens: Token[] = [];
   let forceNumber = true;
   let node = tree.nodes[tree.rootId];
+  // A comment on the starting position comes before the first move.
+  const opening = displayComment(node.comment);
+  if (opening) tokens.push({ kind: "comment", text: opening });
   while (node.children.length > 0) {
     const [mainId, ...alternatives] = node.children;
     forceNumber = pushMove(tree, tokens, mainId, forceNumber);

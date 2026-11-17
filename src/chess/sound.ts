@@ -7,6 +7,7 @@
 // and a limiter so layered sounds stay warm and never clip.
 
 import { createSignal } from "solid-js";
+import { DEFAULT_SETTINGS, settings } from "../settings";
 
 export type SoundKind =
   | "move"
@@ -42,7 +43,18 @@ export function setSoundEnabled(enabled: boolean) {
   if (enabled) playSound("move");
 }
 
-type Engine = { ac: AudioContext; dry: AudioNode; room: AudioNode; noise: AudioBuffer };
+type Engine = {
+  ac: AudioContext;
+  master: GainNode;
+  dry: AudioNode;
+  room: AudioNode;
+  noise: AudioBuffer;
+};
+
+/** Output gain for a volume setting: the default volume plays at full level, 100 a bit louder. */
+export function volumeGain(volume: number): number {
+  return (Math.max(0, volume) / DEFAULT_SETTINGS.volume) ** 2;
+}
 let engine: Engine | undefined;
 
 function setup(): Engine {
@@ -58,7 +70,8 @@ function setup(): Engine {
   limiter.ratio.value = 6;
   limiter.attack.value = 0.002;
   limiter.release.value = 0.1;
-  limiter.connect(ac.destination);
+  const master = ac.createGain();
+  limiter.connect(master).connect(ac.destination);
 
   const dry = ac.createGain();
   dry.gain.value = 0.6;
@@ -75,7 +88,7 @@ function setup(): Engine {
   const data = noise.getChannelData(0);
   for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 
-  engine = { ac, dry, room, noise };
+  engine = { ac, master, dry, room, noise };
   return engine;
 }
 
@@ -198,9 +211,10 @@ function bell(e: Engine, at: number, freq: number, level: number, decay: number)
 
 /** Plays a board sound, optionally `delay` seconds from now (to land with an animation). */
 export function playSound(kind: SoundKind, delay = 0) {
-  if (!soundEnabled()) return;
+  if (!soundEnabled() || settings.volume === 0) return;
   try {
     const e = setup();
+    e.master.gain.value = volumeGain(settings.volume);
     const at = e.ac.currentTime + 0.004 + delay;
     switch (kind) {
       case "move":

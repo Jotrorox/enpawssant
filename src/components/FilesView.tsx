@@ -31,11 +31,18 @@ import {
 
 const FOLDER_KEY = "enpawssant.filesFolder";
 
+/** Whether the file holds exactly one game that was read in full, so saving it can replace it. */
+const isWholeFile = (file: OpenedPgn) =>
+  file.games.length === 1 &&
+  file.errors.length === 0 &&
+  !file.truncated &&
+  file.games[0].warnings.length === 0;
+
 const errorMessage = (error: unknown) => (typeof error === "string" ? error : String(error));
 
 type FilesViewProps = {
-  /** Opens games from a file in tabs. */
-  onOpenGames: (games: ImportedGame[]) => void;
+  /** Opens games from a file in tabs; `path` is given when the file holds just that game. */
+  onOpenGames: (games: ImportedGame[], path?: string) => void;
   /** Imports files into the game database. */
   onImport: (paths: string[]) => void;
   importing: boolean;
@@ -333,7 +340,9 @@ export function FilesView(props: FilesViewProps) {
                   <div class="flex min-h-0 flex-1 flex-col gap-2">
                     <GamePicker
                       parsed={{ ...file(), name: undefined }}
-                      onOpen={props.onOpenGames}
+                      onOpen={(games) =>
+                        props.onOpenGames(games, isWholeFile(file()) ? file().path : undefined)
+                      }
                     />
                   </div>
                 </>

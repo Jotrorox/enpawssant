@@ -153,7 +153,7 @@ function RoleBadge(props: { id: string }) {
   return (
     <Switch>
       <Match when={enginesConfig.primary === props.id}>
-        <span class="shrink-0 rounded-full bg-rose px-2 py-0.5 text-[11px] font-bold text-white">
+        <span class="shrink-0 rounded-full bg-rose px-2 py-0.5 text-[11px] font-bold text-snow">
           Analysis
         </span>
       </Match>
