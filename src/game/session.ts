@@ -5,9 +5,13 @@ import { batch, createMemo, createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { type Nag, toggleQualityNag } from "../chess/nag";
 import { header, type PgnGame } from "../chess/pgn";
-import { type Accuracy, applyReview, mainlineAccuracy } from "../chess/review";
+import {
+  type Accuracy,
+  mainlineAccuracy,
+  type ReviewedPosition,
+  recordReview,
+} from "../chess/review";
 import { type MoveInput, makeMove } from "../chess/rules";
-import type { Score } from "../chess/score";
 import {
   addMove,
   deleteNode,
@@ -144,9 +148,9 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       });
     };
 
-    /** Stores engine evaluations by node and annotates the main line's weak moves with them. */
-    const review = (scores: ReadonlyMap<NodeId, Score>) => {
-      setTree(produce((draft) => applyReview(draft, scores)));
+    /** Stores what a review to `depth` found for a position and judges the moves around it. */
+    const review = (id: NodeId, result: ReviewedPosition, depth: number) => {
+      setTree(produce((draft) => recordReview(draft, id, result, depth)));
     };
 
     const promote = (id: NodeId) => {

@@ -32,6 +32,26 @@ Moving to another position stops the running search, waits for the engine to fin
 then starts the new one, so stale lines never reach the board. Checkmate and stalemate are answered
 without asking the engine.
 
+## Game review
+
+**Analyze full game** (board toolbar) searches every position of the main line to depth 16, with
+progress in the button; click it again to stop.
+
+- Results are written into the game as they come in: each position's evaluation (with its depth,
+  exported as `[%eval 0.31,16]`) and the engine's best move. A stopped analysis keeps what it found,
+  also across tabs and restarts, and the button then offers to **resume** it. Positions imported
+  with an `[%eval]` at least that deep are not searched again.
+- **Accuracy** per player is computed from the evaluations with lichess's formula (winning chances
+  lost per move, weighted by how volatile the game was), so the numbers are comparable to lichess.
+- Moves that lose 5, 10 or 15 percentage points of winning chances are marked as inaccuracies
+  (`?!`), mistakes (`?`) and blunders (`??`). The marks are ordinary NAGs: they show in the notation,
+  are exported in the PGN and are dotted on the eval graph. A move you annotated yourself keeps your
+  annotation.
+- On a marked move, the notation shows the engine's best move instead, and **Add as variation**
+  plays it as a variation in one click.
+- The game header names the opening from the lichess `chess-openings` tables when the PGN has no
+  `Opening` tag, and follows the main line as you play.
+
 ## Play vs Stockfish
 
 The clock button in the board toolbar starts a game against Stockfish in a new tab.
