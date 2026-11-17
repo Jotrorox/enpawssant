@@ -1,7 +1,8 @@
 name: Set up toolchains
 description: >-
   Install the tools pinned in mise.toml, the Rust toolchain from
-  rust-toolchain.toml, and restore the Cargo and pnpm caches.
+  rust-toolchain.toml, Tauri's Linux system packages, and restore the Cargo
+  and pnpm caches.
 
 inputs:
   cache-key:
@@ -12,7 +13,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install mise tools (node, pnpm)
+    # https://v2.tauri.app/start/prerequisites/#linux (Debian/Ubuntu), plus
+    # patchelf and xdg-utils for AppImage bundling and libdbus for the keyring.
+    - name: Install Tauri system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential curl wget file \
+          libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+          libxdo-dev libssl-dev libdbus-1-dev pkg-config patchelf xdg-utils
+
+    - name: Install mise tools (node, pnpm, actionlint, shellcheck)
       uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
       with:
         version: 2026.11.9

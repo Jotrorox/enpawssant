@@ -74,6 +74,7 @@ import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/pla
 import { createGameSession, type GameInfo, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
 import { settings } from "./settings";
+import { checkForUpdates } from "./updates";
 
 /** Lines of the engine running alongside the main one. */
 const SECOND_ENGINE_LINES = 2;
@@ -221,6 +222,10 @@ export default function App() {
   const [toasts, setToasts] = createSignal<Toast[]>([]);
 
   onMount(() => void loadEngines());
+  onMount(async () => {
+    const update = await checkForUpdates({ quiet: true });
+    if (update) notify(`EnPawssant ${update.version} is out. Install it from Settings.`);
+  });
   onMount(() => onCleanup(startCommands()));
   createEffect(() => void showRecentInMenu(recentFiles()).catch(() => {}));
 
@@ -547,6 +552,10 @@ export default function App() {
         break;
       case "settings":
         setSettingsOpen(true);
+        break;
+      case "check-updates":
+        setSettingsOpen(true);
+        void checkForUpdates();
         break;
       case "prev-tab":
       case "next-tab":

@@ -1,0 +1,42 @@
+version: 2
+
+# Note: Dependabot cannot update mise.toml (node, pnpm)
+# or rust-toolchain.toml; bump those by hand. Commit messages keep Dependabot's
+# default "Bump x from a to b", which matches this repo's plain style.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+      rust-dependencies:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      tauri:
+        patterns: ["@tauri-apps/*"]
+      solid:
+        patterns: ["solid-js", "vite-plugin-solid"]
+      frontend-dependencies:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/setup
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]

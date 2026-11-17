@@ -98,11 +98,19 @@ async fn opponent_stop(opponent: State<'_, Opponent>) -> Result<(), String> {
     Ok(())
 }
 
+/// Restarts the app, e.g. once an update is installed. Goes through `RunEvent::Exit` so the
+/// engines are shut down first.
+#[tauri::command]
+fn relaunch(app: AppHandle) {
+    app.request_restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Engine::default())
         .manage(Opponent::new())
         .manage(Engines::default())
@@ -124,6 +132,7 @@ pub fn run() {
             opponent_info,
             opponent_move,
             opponent_stop,
+            relaunch,
             engines::engines_config,
             engines::engines_add,
             engines::engines_remove,

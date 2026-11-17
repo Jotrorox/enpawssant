@@ -29,6 +29,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "BoardGame",
+    "shortDescription": "A cat-themed chess analysis app",
     "externalBin": ["binaries/stockfish"],
     "icon": [
       "icons/32x32.png",
@@ -39,6 +41,12 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM1NUJERjJFNjgxODE1MEMKUldRTUZSaG9MdDliTlNZcnNMSm5vMW1OSlpvMSthZ3hnL1l0WnNLWUNyUEhmdlAxQm4zU1RWVk8K",
+      "endpoints": ["https://github.com/Jotrorox/enpawssant/releases/latest/download/latest.json"]
     }
   }
 }

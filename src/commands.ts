@@ -23,6 +23,7 @@ export type Command =
   | "play"
   | "search"
   | "settings"
+  | "check-updates"
   | "prev-tab"
   | "next-tab"
   | "recent-clear"

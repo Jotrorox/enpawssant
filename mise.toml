@@ -2,6 +2,8 @@
 [tools]
 node = "26"
 pnpm = "12"
+actionlint = "1.7.12"     # GitHub Actions linter
+shellcheck = "0.11.0"     # used by actionlint for `run:` scripts
 
 [tasks.install]
 description = "Install JS dependencies"
@@ -24,7 +26,7 @@ depends = ["install", "fetch-engine"]
 run = "pnpm tauri build"
 
 [tasks.check]
-description = "Lint and type-check Rust and TypeScript"
+description = "Lint and type-check Rust, TypeScript and the GitHub workflows"
 # tauri-build fails if the externalBin sidecar is missing, so fetch it first.
 depends = ["install", "fetch-engine"]
 run = [
@@ -32,6 +34,7 @@ run = [
   "cargo fmt --check",
   "pnpm tsc --noEmit",
   "pnpm biome check .",
+  "actionlint",
 ]
 
 [tasks.fmt]

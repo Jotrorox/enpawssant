@@ -1,6 +1,6 @@
 # EnPawssant
 
-A cat-themed chess app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
+A cat-themed chess app for macOS, Windows and Linux, built with Tauri 2, SolidJS and Stockfish.
 
 ## Features
 
@@ -21,8 +21,15 @@ A cat-themed chess app for macOS and Windows, built with Tauri 2, SolidJS and St
   from your own blunders.
 - **Settings**: light and dark themes, board colours, piece sets, and a native menu bar with
   keyboard shortcuts on macOS.
+- **Updates in the app**: EnPawssant checks for a new version at launch and installs it from
+  Settings.
 
 See [docs/features.md](docs/features.md) for the full tour.
+
+## Download
+
+Get the latest `.dmg`, `.msi`/`.exe`, `.AppImage` or `.deb` from
+[Releases](https://github.com/Jotrorox/enpawssant/releases/latest).
 
 ## Getting started
 
@@ -33,7 +40,8 @@ You need:
 - **[mise](https://mise.jdx.dev/)**, which provides Node and pnpm (`mise.toml`) and runs the
   project tasks.
 - The [Tauri prerequisites](https://tauri.app/start/prerequisites/): Xcode Command Line Tools on
-  macOS, or the MSVC build tools and WebView2 on Windows.
+  macOS, the MSVC build tools and WebView2 on Windows, or WebKitGTK and friends on Linux (plus
+  `libdbus-1-dev` for the keyring; `.github/actions/setup/action.yml` has the Ubuntu list).
 
 ```sh
 mise install    # installs the pinned Node and pnpm
@@ -56,8 +64,9 @@ API rate limits.
 | `mise run fetch-engine` | Download the Stockfish sidecar for this host                           |
 | `mise run release <v>`  | Bump the version everywhere, commit and tag `v<v>` (never pushes)      |
 
-CI runs `check` and `test` on macOS and Windows. Pushing a `v*` tag builds the installers into a
-draft GitHub Release. Signing setup is in [docs/releasing.md](docs/releasing.md).
+CI runs `check` and `test` on macOS, Windows and Linux. Pushing a `v*` tag builds the installers
+into a draft GitHub Release. The release process and signing setup are in
+[docs/releasing.md](docs/releasing.md).
 
 ## Project layout
 

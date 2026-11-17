@@ -35,6 +35,8 @@ const ASSET_PREFERENCES = [
   ],
   [/^x86_64-apple-darwin$/, ["macos-x86-64-avx2", "macos-x86-64", "macos-universal"]],
   [/^x86_64-pc-windows-/, ["windows-x86-64-avx2", "windows-x86-64-universal", "windows-x86-64"]],
+  [/^x86_64-unknown-linux-/, ["linux-x86-64-universal", "ubuntu-x86-64-avx2", "ubuntu-x86-64"]],
+  [/^aarch64-unknown-linux-/, ["linux-arm64-universal", "linux-arm64"]],
 ];
 
 function parseArgs(argv) {

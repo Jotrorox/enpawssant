@@ -58,6 +58,11 @@ jobs:
             os: windows-latest
             engine-target: x86_64-pc-windows-msvc
             args: ""
+          # The oldest supported Ubuntu, so the AppImage and .deb run on older glibc too.
+          - name: Linux x64
+            os: ubuntu-22.04
+            engine-target: x86_64-unknown-linux-gnu
+            args: --bundles appimage,deb
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,6 +142,33 @@ jobs:
           "TAURI_SIGNING_ARGS=--config $configPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Output "Code signing enabled."
 
+      # The in-app updater only installs bundles signed with the key whose public
+      # half is in tauri.conf.json (plugins.updater.pubkey). With the key, Tauri
+      # also writes updater bundles (.app.tar.gz, AppImage, installers) plus .sig
+      # files, and tauri-action merges every platform into latest.json on the
+      # release. createUpdaterArtifacts stays off in tauri.conf.json so local and
+      # CI builds work without the private key.
+      - name: Configure updater signing (optional)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::notice::TAURI_SIGNING_PRIVATE_KEY not set: no updater bundles or latest.json; installed apps won't be offered this release."
+            exit 0
+          fi
+          put() { printf '%s<<__EOF__\n%s\n__EOF__\n' "$1" "$2" >> "$GITHUB_ENV"; }
+          put TAURI_SIGNING_PRIVATE_KEY "$TAURI_SIGNING_PRIVATE_KEY"
+          put TAURI_SIGNING_PRIVATE_KEY_PASSWORD "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          dir="$RUNNER_TEMP"
+          # Forward slashes so the path survives argument splitting on Windows.
+          if command -v cygpath > /dev/null; then dir="$(cygpath -m "$dir")"; fi
+          config="$dir/tauri.updater.json"
+          echo '{"bundle":{"createUpdaterArtifacts":true}}' > "$config"
+          echo "TAURI_UPDATER_ARGS=--config $config" >> "$GITHUB_ENV"
+          echo "Updater signing enabled."
+
       - name: Build and upload bundles
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -146,7 +178,7 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ github.ref_name }}
           releaseDraft: true
-          args: ${{ matrix.args }} ${{ env.TAURI_SIGNING_ARGS }}
+          args: ${{ matrix.args }} ${{ env.TAURI_SIGNING_ARGS }} ${{ env.TAURI_UPDATER_ARGS }}
 
       # Tauri notarizes and staples the .app, but not the .dmg around it.
       # Notarize and staple the disk image too, then replace the uploaded copy.

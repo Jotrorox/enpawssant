@@ -1,4 +1,4 @@
-// The settings dialog behind the ⚙ button: appearance, sound and the analysis engine.
+// The settings dialog behind the ⚙ button: appearance, sound, the analysis engine and updates.
 
 import {
   createEffect,
@@ -7,7 +7,9 @@ import {
   createSignal,
   For,
   type JSX,
+  Match,
   Show,
+  Switch,
 } from "solid-js";
 import { fetchEngineInfo } from "../chess/engine";
 import {
@@ -28,8 +30,17 @@ import {
   THEME_MODES,
   updateSettings,
 } from "../settings";
+import {
+  appVersion,
+  checkForUpdates,
+  type DownloadProgress,
+  installUpdate,
+  restartApp,
+  type UpdateState,
+  updateState,
+} from "../updates";
 import { SoundOffIcon, SoundOnIcon } from "./Icons";
-import { INPUT, Modal, Segmented } from "./ui";
+import { INPUT, Modal, PRIMARY_BUTTON, ProgressBar, SECONDARY_BUTTON, Segmented } from "./ui";
 
 const errorMessage = (error: unknown) => (typeof error === "string" ? error : String(error));
 
@@ -135,6 +146,8 @@ export function SettingsDialog(props: { open: boolean; onClose: () => void }) {
         </Section>
 
         <EngineSettings open={props.open} />
+
+        <UpdateSettings />
       </div>
     </Modal>
   );
@@ -230,6 +243,119 @@ function EngineSettings(props: { open: boolean }) {
           {error()}
         </p>
       </Show>
+    </Section>
+  );
+}
+
+const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+
+const progressText = (progress: DownloadProgress) =>
+  progress.total
+    ? `${megabytes(progress.downloaded)} of ${megabytes(progress.total)}`
+    : megabytes(progress.downloaded);
+
+function UpdateSettings() {
+  const [restartError, setRestartError] = createSignal<string>();
+  /** The state narrowed to `status`, for `<Match>`. */
+  const is = <S extends UpdateState["status"]>(status: S) => {
+    const current = updateState();
+    return current.status === status ? (current as Extract<UpdateState, { status: S }>) : false;
+  };
+  const notes = (notes: string | null) => (
+    <Show when={notes}>
+      {(text) => (
+        <p class="max-h-32 overflow-y-auto text-[13px] whitespace-pre-line text-ink/80">{text()}</p>
+      )}
+    </Show>
+  );
+  const restart = () => {
+    setRestartError(undefined);
+    restartApp().catch((e) => setRestartError(errorMessage(e)));
+  };
+
+  return (
+    <Section title="Updates">
+      <div class="flex flex-col items-start gap-2.5">
+        <Switch>
+          <Match when={is("available")}>
+            {(s) => (
+              <>
+                <p class="text-[14px] font-bold">EnPawssant {s().info.version} is out</p>
+                {notes(s().info.notes)}
+                <button type="button" class={PRIMARY_BUTTON} onClick={() => void installUpdate()}>
+                  Download and install
+                </button>
+              </>
+            )}
+          </Match>
+          <Match when={is("downloading")}>
+            {(s) => (
+              <>
+                <p class="text-[14px] font-bold">Fetching EnPawssant {s().info.version}…</p>
+                <ProgressBar
+                  class="w-full"
+                  label="Downloading the update"
+                  fraction={
+                    s().progress.total
+                      ? s().progress.downloaded / (s().progress.total ?? 1)
+                      : undefined
+                  }
+                />
+                <p class="text-[12px] text-muted">{progressText(s().progress)}</p>
+              </>
+            )}
+          </Match>
+          <Match when={is("ready")}>
+            {(s) => (
+              <>
+                <p class="text-[14px] font-bold">EnPawssant {s().info.version} is installed</p>
+                <p class="text-[13px] text-muted">Restart to start using it.</p>
+                <button type="button" class={PRIMARY_BUTTON} onClick={restart}>
+                  Restart now
+                </button>
+                <Show when={restartError()}>
+                  <p role="alert" class="text-[13px] font-semibold text-error">
+                    Couldn't restart: {restartError()}
+                  </p>
+                </Show>
+              </>
+            )}
+          </Match>
+          <Match when={is("error")}>
+            {(s) => (
+              <>
+                <p role="alert" class="text-[14px] font-bold text-error">
+                  {s().info ? "The update didn't install" : "Couldn't check for updates"}
+                </p>
+                <p class="text-[13px] text-muted">{s().message}</p>
+                <button
+                  type="button"
+                  class={SECONDARY_BUTTON}
+                  onClick={() => void (s().info ? installUpdate() : checkForUpdates())}
+                >
+                  Try again
+                </button>
+              </>
+            )}
+          </Match>
+          <Match when={true}>
+            <p class="text-[13px] text-muted">
+              <Show when={appVersion()}>{(version) => <>You have EnPawssant {version()}. </>}</Show>
+              {is("current")
+                ? "That's the newest version."
+                : "EnPawssant looks for a new version each time it opens."}
+            </p>
+            <button
+              type="button"
+              class={SECONDARY_BUTTON}
+              disabled={updateState().status === "checking"}
+              onClick={() => void checkForUpdates()}
+            >
+              {updateState().status === "checking" ? "Checking…" : "Check for updates"}
+            </button>
+          </Match>
+        </Switch>
+      </div>
     </Section>
   );
 }

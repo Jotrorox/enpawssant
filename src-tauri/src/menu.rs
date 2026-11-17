@@ -43,6 +43,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             name: Some("EnPawssant".into()),
             ..Default::default()
         }))
+        .item(&item("check-updates", "Check for Updates…", None)?)
         .separator()
         .item(&item("settings", "Settings…", Some("CmdOrCtrl+,"))?)
         .separator()

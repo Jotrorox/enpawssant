@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     env:
       # fetch-stockfish queries the GitHub API; authenticate to avoid rate limits.
