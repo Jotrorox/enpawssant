@@ -278,6 +278,16 @@ pub fn parse_id_author(line: &str) -> Option<&str> {
     }
 }
 
+/// The move of a `bestmove` line, or `None` for other lines and for
+/// `bestmove (none)`, which engines send when there is no legal move.
+pub fn parse_bestmove(line: &str) -> Option<&str> {
+    let mut tokens = line.split_whitespace();
+    match (tokens.next(), tokens.next()) {
+        (Some("bestmove"), Some(mv)) if mv != "(none)" => Some(mv),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +439,14 @@ mod tests {
             Some("the Stockfish developers")
         );
         assert_eq!(parse_id_author("id name Stockfish"), None);
+    }
+
+    #[test]
+    fn parses_bestmove() {
+        assert_eq!(parse_bestmove("bestmove e2e4 ponder e7e5"), Some("e2e4"));
+        assert_eq!(parse_bestmove("bestmove e7e8q"), Some("e7e8q"));
+        assert_eq!(parse_bestmove("bestmove (none)"), None);
+        assert_eq!(parse_bestmove("bestmove"), None);
+        assert_eq!(parse_bestmove("info pv e2e4"), None);
     }
 }

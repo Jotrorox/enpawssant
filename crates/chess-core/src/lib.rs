@@ -40,9 +40,16 @@ pub struct LineMove {
 
 /// The position an engine search starts from. Engine output refers to it, so it
 /// converts lines to SAN and scores to White's point of view.
+///
+/// It may be reached by moves from an earlier position, which the engine is
+/// then given too so it can see repetitions.
 #[derive(Clone, Debug)]
 pub struct AnalysisRoot {
     pos: Chess,
+    /// The normalised FEN the moves start from.
+    start: String,
+    /// Standard UCI moves leading from `start` to `pos`.
+    moves: Vec<String>,
 }
 
 impl AnalysisRoot {
@@ -58,13 +65,46 @@ impl AnalysisRoot {
             .or_else(PositionError::ignore_invalid_castling_rights)
             .or_else(PositionError::ignore_invalid_ep_square)
             .map_err(|e| InvalidFen(format!("illegal position: {e}")))?;
-        Ok(AnalysisRoot { pos })
+        Ok(AnalysisRoot {
+            start: Fen::from_position(&pos, EnPassantMode::Legal).to_string(),
+            pos,
+            moves: Vec::new(),
+        })
     }
 
-    /// The position as a normalised FEN, to hand to the engine so that it and
-    /// this root agree on castling rights and en passant.
+    /// The position after playing `uci_moves` from `fen`.
+    pub fn from_fen_and_moves<S: AsRef<str>>(
+        fen: &str,
+        uci_moves: &[S],
+    ) -> Result<AnalysisRoot, InvalidFen> {
+        let mut root = AnalysisRoot::from_fen(fen)?;
+        for uci in uci_moves {
+            let uci = uci.as_ref();
+            let mv = uci
+                .parse::<UciMove>()
+                .ok()
+                .and_then(|m| m.to_move(&root.pos).ok())
+                .ok_or_else(|| InvalidFen(format!("illegal move: {uci}")))?;
+            root.moves
+                .push(mv.to_uci(CastlingMode::Standard).to_string());
+            root.pos.play_unchecked(mv);
+        }
+        Ok(root)
+    }
+
+    /// The position as a normalised FEN.
     pub fn fen(&self) -> String {
         Fen::from_position(&self.pos, EnPassantMode::Legal).to_string()
+    }
+
+    /// The UCI `position` command for this root, with normalised castling
+    /// rights and en passant so that the engine and this root agree on them.
+    pub fn uci_position(&self) -> String {
+        if self.moves.is_empty() {
+            format!("position fen {}", self.start)
+        } else {
+            format!("position fen {} moves {}", self.start, self.moves.join(" "))
+        }
     }
 
     pub fn turn(&self) -> Color {
@@ -221,6 +261,26 @@ mod tests {
                 .final_outcome(),
             None
         );
+    }
+
+    #[test]
+    fn plays_moves_from_a_fen() {
+        let root = AnalysisRoot::from_fen_and_moves(
+            "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+            &["e1h1", "e8c8"],
+        )
+        .unwrap();
+        assert_eq!(root.fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 2 2");
+        // Castling is passed on in standard notation.
+        assert_eq!(
+            root.uci_position(),
+            "position fen r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1 moves e1g1 e8c8"
+        );
+        assert_eq!(
+            AnalysisRoot::from_fen(STARTING_FEN).unwrap().uci_position(),
+            format!("position fen {STARTING_FEN}")
+        );
+        assert!(AnalysisRoot::from_fen_and_moves(STARTING_FEN, &["e2e5"]).is_err());
     }
 
     #[test]

@@ -33,10 +33,12 @@ import { EnginesView } from "./components/EnginesView";
 import { FilesView } from "./components/FilesView";
 import { PawIcon } from "./components/Icons";
 import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
+import { type NewGame, PlayDialog } from "./components/PlayDialog";
 import { PuzzlesView } from "./components/PuzzlesView";
 import { type Section, SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState, type Toast, Toasts } from "./components/ui";
+import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/play";
 import { createGameSession, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
 
@@ -48,14 +50,30 @@ const TOAST_MS = 5000;
 /** Depth every position is searched to by "Analyze full game". */
 const REVIEW_DEPTH = 16;
 
-/** A workspace tab and the game open in it. */
-type Tab = WorkspaceTab & { session: GameSession };
+/** A workspace tab, the game open in it and the game being played against the engine there. */
+type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame };
 
 export default function App() {
   let opened = 0;
   const createTab = (game: PgnGame, title = gameTitle(game), position?: number[]): Tab => {
     opened += 1;
     return { id: `game-${opened}`, title, session: createGameSession(game, { position }) };
+  };
+  /** A tab for a new game against the engine; it is marked live while the game is on. */
+  const createEngineGameTab = ({ settings, startFen, engineName }: NewGame): Tab => {
+    const tab = createTab({
+      headers: engineGameHeaders(settings, engineName),
+      startFen,
+      moves: [],
+    });
+    const game = createEngineGame(tab.session, settings);
+    return {
+      ...tab,
+      game,
+      get live() {
+        return game.playing();
+      },
+    };
   };
   const createBoard = () => createTab({ headers: [], startFen: START_FEN, moves: [] }, "New board");
 
@@ -79,6 +97,7 @@ export default function App() {
   /** Games read from dropped files, shown in the import dialog's game picker. */
   const [preset, setPreset] = createSignal<ParsedPgn & { name?: string }>();
   const [exporting, setExporting] = createSignal(false);
+  const [choosingGame, setChoosingGame] = createSignal(false);
   const [section, setSection] = createSignal<Section>("board");
   const [databaseRequest, setDatabaseRequest] = createSignal<DatabaseRequest>();
   const [dropping, setDropping] = createSignal(false);
@@ -116,6 +135,7 @@ export default function App() {
     const remaining = tabs().filter((tab) => tab.id !== id);
     if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
+    closing?.game?.dispose();
     closing?.session.dispose();
   };
 
@@ -308,12 +328,14 @@ export default function App() {
                 {(tab) => (
                   <GameWorkspace
                     session={tab.session}
+                    game={tab.game}
                     onImport={() => {
                       setPreset(undefined);
                       setImporting(true);
                     }}
                     onExport={() => setExporting(true)}
                     onSaveToDatabase={() => void saveToDatabase()}
+                    onPlay={() => setChoosingGame(true)}
                   />
                 )}
               </Show>
@@ -331,6 +353,12 @@ export default function App() {
         open={exporting()}
         session={activeTab()?.session}
         onClose={() => setExporting(false)}
+      />
+      <PlayDialog
+        open={choosingGame()}
+        currentFen={activeTab()?.session.node().fen}
+        onClose={() => setChoosingGame(false)}
+        onStart={(game) => openTabs([createEngineGameTab(game)])}
       />
       <Show when={dropping()}>
         <div class="pointer-events-none fixed inset-3 z-40 grid place-items-center rounded-[28px] border-[3px] border-dashed border-rose bg-blush-50/85 backdrop-blur-[2px]">
@@ -357,13 +385,18 @@ function count(n: number, noun: string): string {
 
 function GameWorkspace(props: {
   session: GameSession;
+  game?: EngineGame;
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
+  onPlay: () => void;
 }) {
   const session = props.session;
-  const [orientation, setOrientation] = createSignal<Color>("w");
+  const game = props.game;
+  const [orientation, setOrientation] = createSignal<Color>(game?.settings.color ?? "w");
   const fen = () => session.node().fen;
+  /** The engine keeps its opinions to itself while a game against it is on. */
+  const playing = () => game?.playing() ?? false;
 
   const [engineOn, setEngineOn] = createSignal(true);
   const primaryId = () => enginesConfig.primary;
@@ -371,13 +404,13 @@ function GameWorkspace(props: {
   const engine = createEngineAnalysis({
     engineId: primaryId,
     fen,
-    enabled: engineOn,
+    enabled: () => engineOn() && !playing(),
     multipv: ENGINE_LINES,
   });
   const second = createEngineAnalysis({
     engineId: secondaryId,
     fen,
-    enabled: engineOn,
+    enabled: () => engineOn() && !playing(),
     multipv: SECOND_ENGINE_LINES,
   });
   const analysis = () => engine.analysisOf(fen());
@@ -387,7 +420,7 @@ function GameWorkspace(props: {
     return positionScore(engine.analysisOf(node.fen)) ?? node.eval;
   };
   // Positions without either stay empty in the eval graph.
-  const evals = createMemo(() => session.line().map(scoreOf));
+  const evals = createMemo(() => session.line().map((id) => (playing() ? undefined : scoreOf(id))));
 
   /** Searches every main-line position to a fixed depth, then stores and judges the results. */
   const reviewGame = async () => {
@@ -407,7 +440,7 @@ function GameWorkspace(props: {
 
   const arrows = createMemo(() => {
     const current = analysis();
-    return engineOn() && current ? lineArrows(current) : [];
+    return engineOn() && !playing() && current ? lineArrows(current) : [];
   });
 
   onMount(() => {
@@ -451,12 +484,14 @@ function GameWorkspace(props: {
         orientation={orientation()}
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={session.goToIndex}
-        onMove={session.play}
+        onMove={game ? (game.canMove() ? game.move : undefined) : session.play}
         onImport={props.onImport}
         onExport={props.onExport}
         onSaveToDatabase={props.onSaveToDatabase}
+        onPlay={props.onPlay}
         review={engine.reviewProgress()}
         reviewError={engine.reviewError()}
+        reviewDisabled={playing()}
         onReview={() => void reviewGame()}
         onCancelReview={engine.cancelReview}
       />
@@ -468,9 +503,11 @@ function GameWorkspace(props: {
             ? { id: secondaryId() ?? "", analysis: second.analysisOf(fen()), error: second.error() }
             : undefined
         }
-        score={scoreOf(session.currentId())}
+        score={playing() ? undefined : scoreOf(session.currentId())}
         engineOn={engineOn()}
         onToggleEngine={() => setEngineOn((on) => !on)}
+        game={game}
+        onNewGame={props.onPlay}
       />
     </div>
   );

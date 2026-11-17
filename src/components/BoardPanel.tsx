@@ -9,6 +9,7 @@ import { Board } from "./Board";
 import {
   ChartIcon,
   CheckIcon,
+  ChessClockIcon,
   CopyIcon,
   DatabaseIcon,
   ExportIcon,
@@ -37,13 +38,17 @@ type BoardPanelProps = {
   orientation: Color;
   onFlip: () => void;
   onPly: (ply: number) => void;
-  onMove: (move: MoveInput) => void;
+  /** Without it the board takes no moves, e.g. while the engine is to move. */
+  onMove?: (move: MoveInput) => void;
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
+  onPlay: () => void;
   /** Progress of the running full-game analysis, if one is running. */
   review?: ReviewProgress;
   reviewError?: string;
+  /** Full-game analysis waits while a game against the engine is on. */
+  reviewDisabled?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 };
@@ -78,7 +83,9 @@ export function BoardPanel(props: BoardPanelProps) {
         onImport={props.onImport}
         onExport={props.onExport}
         onSaveToDatabase={props.onSaveToDatabase}
+        onPlay={props.onPlay}
         review={props.review}
+        reviewDisabled={props.reviewDisabled}
         onReview={props.onReview}
         onCancelReview={props.onCancelReview}
       />
@@ -165,7 +172,9 @@ function BoardToolbar(props: {
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
+  onPlay: () => void;
   review?: ReviewProgress;
+  reviewDisabled?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 }) {
@@ -204,6 +213,9 @@ function BoardToolbar(props: {
       </IconButton>
       <IconButton label="Save to the game database" onClick={() => props.onSaveToDatabase()}>
         <DatabaseIcon />
+      </IconButton>
+      <IconButton label="Play vs Stockfish" onClick={() => props.onPlay()}>
+        <ChessClockIcon />
       </IconButton>
       <IconButton
         label={soundEnabled() ? "Mute move sounds" : "Unmute move sounds"}
@@ -255,7 +267,9 @@ function BoardToolbar(props: {
           <button
             type="button"
             onClick={() => props.onReview()}
-            class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300"
+            disabled={props.reviewDisabled}
+            title={props.reviewDisabled ? "Available once the game is over" : undefined}
+            class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400"
           >
             <ChartIcon class="size-[18px]" />
             Analyze full game

@@ -9,7 +9,7 @@ mod puzzles;
 mod store;
 
 use database::Database;
-use engine::{Engine, EngineEvent, EngineInfo};
+use engine::{Clock, Engine, EngineEvent, EngineInfo, Opponent, Strength};
 use engines::Engines;
 use lichess::Lichess;
 use puzzles::Puzzles;
@@ -55,12 +55,50 @@ async fn engine_stop(engine: State<'_, Engine>, engine_id: String) -> Result<(),
     Ok(())
 }
 
+/// Starts the engine that games are played against, if needed, and describes it.
+#[tauri::command]
+async fn opponent_info(
+    app: AppHandle,
+    opponent: State<'_, Opponent>,
+) -> Result<EngineInfo, String> {
+    opponent.info(&app).await
+}
+
+/// Asks the opponent for its move in the position after `moves` from `fen`,
+/// playing at `strength` with `clock` (or for a second without one). Pass
+/// `new_game` with the first request of a game. The move arrives in the `done`
+/// event on `on_event`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn opponent_move(
+    app: AppHandle,
+    opponent: State<'_, Opponent>,
+    fen: String,
+    moves: Vec<String>,
+    strength: Strength,
+    clock: Option<Clock>,
+    new_game: bool,
+    on_event: Channel<EngineEvent>,
+) -> Result<(), String> {
+    opponent
+        .play(&app, fen, moves, strength, clock, new_game, on_event)
+        .await
+}
+
+/// Stops the opponent's search; its `done` event then has no move.
+#[tauri::command]
+async fn opponent_stop(opponent: State<'_, Opponent>) -> Result<(), String> {
+    opponent.stop().await;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Engine::default())
+        .manage(Opponent::new())
         .manage(Engines::default())
         .manage(Lichess::default())
         .manage(Database::default())
@@ -69,6 +107,9 @@ pub fn run() {
             engine_info,
             engine_analyze,
             engine_stop,
+            opponent_info,
+            opponent_move,
+            opponent_stop,
             engines::engines_config,
             engines::engines_add,
             engines::engines_remove,
@@ -113,7 +154,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                tauri::async_runtime::block_on(app.state::<Engine>().shutdown());
+                let (engine, opponent) = (app.state::<Engine>(), app.state::<Opponent>());
+                tauri::async_runtime::block_on(async {
+                    tokio::join!(engine.shutdown(), opponent.shutdown());
+                });
             }
         });
 }

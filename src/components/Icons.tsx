@@ -227,6 +227,16 @@ export const RetryIcon = (p: IconProps) => (
   </Stroke>
 );
 
+/** A two-faced chess clock, for playing against the engine. */
+export const ChessClockIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <rect x="3" y="8" width="18" height="12" rx="3" />
+    <circle cx="8.5" cy="14" r="2.6" />
+    <circle cx="15.5" cy="14" r="2.6" />
+    <path d="M8.5 14v-1.4M15.5 14l1-1M8.5 8V5.5M7 5.5h3M15.5 8V6.5" />
+  </Stroke>
+);
+
 /** Rounded cat head used for the logo and the coach avatar. */
 export function CatIcon(props: IconProps & { filled?: boolean }) {
   return (
