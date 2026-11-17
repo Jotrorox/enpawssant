@@ -27,18 +27,9 @@ import { formatScore, type GameResult, type Score, shareFor } from "../chess/sco
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
-import { Notation } from "./Notation";
+import { type BestMoveHint, Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
-
-type PanelTab = "analysis" | "database" | "annotate" | "info";
-
-const PANEL_TABS = [
-  { value: "analysis", label: "Analysis" },
-  { value: "database", label: "Database" },
-  { value: "annotate", label: "Annotate" },
-  { value: "info", label: "Info" },
-] as const;
 
 /** What one engine found for the current position. */
 export type EngineView = {
@@ -55,6 +46,8 @@ type AnalysisPanelProps = {
   secondary?: EngineView;
   /** Evaluation of the current position: the engine's, or the one the game was imported with. */
   score?: Score;
+  /** Set on an inaccuracy, mistake or blunder: what would have been better. */
+  bestMove?: BestMoveHint;
   engineOn: boolean;
   onToggleEngine: () => void;
   /** The game against the engine in this tab, if there is one. */
@@ -64,9 +57,8 @@ type AnalysisPanelProps = {
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
   const fen = () => props.session.node().fen;
-  const [tab, setTab] = createSignal<PanelTab>("analysis");
-  // Lives here rather than in the engine card so switching panels doesn't restart the engine.
-  // Asking again after the engine restarts with new options picks up its new settings.
+  // Lives here rather than in the engine card so hiding the card during a game doesn't ask the
+  // engine again. Asking again after the engine restarts with new options picks up its settings.
   const [engine] = createResource(
     () => [props.primary.id, engineRevision(props.primary.id)] as const,
     ([id]) => fetchEngineInfo(id),
@@ -74,43 +66,24 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
 
   return (
     <div class="flex min-h-0 min-w-0 flex-col gap-3 pt-3.5 pr-3.5 pb-3.5">
-      <Segmented
-        label="Panels"
-        options={PANEL_TABS}
-        value={tab()}
-        onChange={setTab}
-        class="shrink-0 border border-blush-200/80 bg-blush-100/80"
-      />
-      <Show
-        when={tab() === "analysis"}
-        fallback={
-          <Card class="flex flex-1 p-5">
-            <EmptyState class="flex-1">
-              The {PANEL_TABS.find((t) => t.value === tab())?.label.toLowerCase()} panel is still
-              napping. Check back soon!
-            </EmptyState>
-          </Card>
-        }
-      >
-        <Show when={props.game}>
-          {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
-        </Show>
-        {/* No help from the engine or the explorer while the game is on. */}
-        <Show when={!props.game?.playing()}>
-          <EngineCard
-            engine={engine}
-            engineId={props.primary.id}
-            fen={fen()}
-            analysis={props.primary.analysis}
-            enabled={props.engineOn}
-            error={props.primary.error}
-            secondary={props.secondary}
-            onToggle={props.onToggleEngine}
-          />
-          <ExplorerCard session={props.session} />
-        </Show>
-        <Notation session={props.session} score={props.score} />
+      <Show when={props.game}>
+        {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
       </Show>
+      {/* No help from the engine or the explorer while the game is on. */}
+      <Show when={!props.game?.playing()}>
+        <EngineCard
+          engine={engine}
+          engineId={props.primary.id}
+          fen={fen()}
+          analysis={props.primary.analysis}
+          enabled={props.engineOn}
+          error={props.primary.error}
+          secondary={props.secondary}
+          onToggle={props.onToggleEngine}
+        />
+        <ExplorerCard session={props.session} />
+      </Show>
+      <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
     </div>
   );
 }

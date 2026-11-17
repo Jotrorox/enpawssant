@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   createEffect,
   createMemo,
+  createResource,
   createSignal,
   Match,
   onCleanup,
@@ -9,7 +10,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { type Color, START_FEN } from "./chess/board";
+import { type Color, moveNumberPrefix, START_FEN } from "./chess/board";
 import {
   addGame,
   databaseChanged,
@@ -21,18 +22,19 @@ import {
 } from "./chess/database";
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import { enginesConfig, loadEngines } from "./chess/engines";
+import { fetchOpeningName } from "./chess/explorer";
 import { readPgnFile, rememberFile } from "./chess/files";
 import { colorOf } from "./chess/online";
 import type { ImportedGame, ParsedPgn, PgnGame } from "./chess/pgn";
-import { mainline } from "./chess/review";
-import type { Score } from "./chess/score";
-import type { NodeId } from "./chess/tree";
+import { mainline, reviewCoverage, reviewedScore, reviewNag } from "./chess/review";
+import { makeMove, parseUciMove } from "./chess/rules";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { type DatabaseRequest, DatabaseView } from "./components/DatabaseView";
 import { EnginesView } from "./components/EnginesView";
 import { FilesView } from "./components/FilesView";
 import { PawIcon } from "./components/Icons";
+import type { BestMoveHint } from "./components/Notation";
 import { ExportDialog, ImportDialog, type ImportSource } from "./components/PgnDialogs";
 import { type NewGame, PlayDialog } from "./components/PlayDialog";
 import { PuzzlesView } from "./components/PuzzlesView";
@@ -40,7 +42,7 @@ import { type Section, SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState, type Toast, Toasts } from "./components/ui";
 import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/play";
-import { createGameSession, type GameSession, gameTitle } from "./game/session";
+import { createGameSession, type GameInfo, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
 
 /** Number of engine lines shown in the analysis panel. */
@@ -48,7 +50,10 @@ const ENGINE_LINES = 3;
 /** Lines of the engine running alongside the main one. */
 const SECOND_ENGINE_LINES = 2;
 const TOAST_MS = 5000;
-/** Depth every position is searched to by "Analyze full game". */
+/**
+ * Depth every position is searched to by "Analyze full game". Positions stored with an evaluation
+ * at least this deep count as analysed, so a stopped analysis resumes where it left off.
+ */
 const REVIEW_DEPTH = 16;
 
 /**
@@ -427,6 +432,20 @@ function GameWorkspace(props: {
   /** The engine keeps its opinions to itself while a game against it is on. */
   const playing = () => game?.playing() ?? false;
 
+  /** Positions of the main line; a new array only when the main line itself changes. */
+  const mainFens = createMemo(
+    () => mainline(session.tree).map((id) => session.tree.nodes[id].fen),
+    [],
+    { equals: (a, b) => a.length === b.length && a.every((fen, i) => fen === b[i]) },
+  );
+  const [opening] = createResource(mainFens, (fens) => fetchOpeningName(fens).catch(() => null));
+  /** The game's details, its opening named from the opening tables when the PGN doesn't name it. */
+  const info = createMemo((): GameInfo => {
+    const base = session.info();
+    const named = opening.latest;
+    return base.opening || !named ? base : { ...base, eco: named.eco, opening: named.name };
+  });
+
   const [engineOn, setEngineOn] = createSignal(true);
   const primaryId = () => enginesConfig.primary;
   const secondaryId = () => enginesConfig.secondary ?? undefined;
@@ -451,21 +470,65 @@ function GameWorkspace(props: {
   // Positions without either stay empty in the eval graph.
   const evals = createMemo(() => session.line().map((id) => (playing() ? undefined : scoreOf(id))));
 
-  /** Searches every main-line position to a fixed depth, then stores and judges the results. */
+  /**
+   * Searches every main-line position to a fixed depth, storing and judging each result as it
+   * comes in. Positions analysed before (or imported with a deep enough `[%eval]`) are skipped, so
+   * running it again after stopping resumes it.
+   */
   const reviewGame = async () => {
     const ids = mainline(session.tree);
-    const scores = await engine.review(
+    await engine.review(
       ids.map((id) => session.tree.nodes[id].fen),
       REVIEW_DEPTH,
+      {
+        skip: (index) => {
+          // A move deleted during the analysis has nothing left to analyse.
+          const node = session.tree.nodes[ids[index]];
+          return !node || reviewedScore(node, REVIEW_DEPTH) !== undefined;
+        },
+        onResult: (index, update, depth) => {
+          const score = positionScore(update);
+          if (!score) return;
+          session.review(
+            ids[index],
+            { score, depth, bestMove: update.lines[0]?.uci[0] },
+            REVIEW_DEPTH,
+          );
+        },
+      },
     );
-    if (!scores) return;
-    const byNode = new Map<NodeId, Score>();
-    ids.forEach((id, index) => {
-      const score = scores[index];
-      if (score) byNode.set(id, score);
-    });
-    session.review(byNode);
   };
+  /** How much of the main line the analysis has covered, for resuming it. */
+  const coverage = createMemo(() => reviewCoverage(session.tree, REVIEW_DEPTH));
+  /** Inaccuracies, mistakes and blunders along the current line, marked on the eval graph. */
+  const judgements = createMemo(() =>
+    session.line().map((id) => reviewNag(session.tree.nodes[id]?.nags ?? [])),
+  );
+
+  /** For an inaccuracy, mistake or blunder: what the engine would have played instead. */
+  const bestMoveHint = createMemo((): BestMoveHint | undefined => {
+    const node = session.node();
+    const nag = reviewNag(node.nags);
+    if (!nag || !node.move || node.parent === undefined || playing()) return undefined;
+    const parent = session.tree.nodes[node.parent];
+    // A review stores the best move; otherwise the engine may have looked at the position since.
+    const uci = parent.bestMove ?? engine.analysisOf(parent.fen)?.lines[0]?.uci[0];
+    if (!uci) return { nag };
+    // E.g. a "?" given by hand to the move the engine likes best.
+    if (uci === node.move.uci) return undefined;
+    const best = makeMove(parent.fen, parseUciMove(uci));
+    if (!best) return undefined;
+    const parentId = parent.id;
+    const input = parseUciMove(best.uci);
+    return {
+      nag,
+      best: {
+        label: `${moveNumberPrefix(parent.ply, true)} ${best.san}`,
+        inTree: parent.children.some((id) => session.tree.nodes[id].move?.uci === best.uci),
+        play: () => void session.playFrom(parentId, input),
+      },
+    };
+  });
 
   const arrows = createMemo(() => {
     const current = analysis();
@@ -503,7 +566,7 @@ function GameWorkspace(props: {
   return (
     <div class="grid h-full grid-cols-[minmax(0,1fr)_minmax(0,1.02fr)] gap-3.5">
       <BoardPanel
-        info={session.info()}
+        info={info()}
         ply={session.index()}
         maxPly={session.line().length - 1}
         fen={fen()}
@@ -520,6 +583,8 @@ function GameWorkspace(props: {
         onPlay={props.onPlay}
         review={engine.reviewProgress()}
         reviewError={engine.reviewError()}
+        reviewed={coverage()}
+        judgements={judgements()}
         reviewDisabled={playing()}
         onReview={() => void reviewGame()}
         onCancelReview={engine.cancelReview}
@@ -535,6 +600,7 @@ function GameWorkspace(props: {
         score={playing() ? undefined : scoreOf(session.currentId())}
         engineOn={engineOn()}
         onToggleEngine={() => setEngineOn((on) => !on)}
+        bestMove={bestMoveHint()}
         game={game}
         onNewGame={props.onPlay}
       />
