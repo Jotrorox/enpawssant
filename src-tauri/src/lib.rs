@@ -5,6 +5,7 @@ mod engines;
 mod explorer;
 mod files;
 mod lichess;
+mod online;
 mod pgn;
 mod puzzles;
 mod store;
@@ -14,6 +15,7 @@ use database::Database;
 use engine::{Clock, Engine, EngineEvent, EngineInfo, Opponent, Strength};
 use engines::Engines;
 use lichess::Lichess;
+use online::ChessCom;
 use puzzles::Puzzles;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, RunEvent, State};
@@ -103,6 +105,7 @@ pub fn run() {
         .manage(Opponent::new())
         .manage(Engines::default())
         .manage(Lichess::default())
+        .manage(ChessCom::default())
         .manage(Database::default())
         .manage(Puzzles::default())
         .manage(Blunders::default())
@@ -132,6 +135,7 @@ pub fn run() {
             database::db_search,
             database::db_game,
             database::db_add_game,
+            database::db_add_games,
             database::db_delete_game,
             database::db_clear,
             database::db_explorer,
@@ -147,6 +151,8 @@ pub fn run() {
             explorer::lichess_sign_in,
             explorer::lichess_cancel_sign_in,
             explorer::lichess_sign_out,
+            online::lichess_games,
+            online::chesscom_games,
             puzzles::puzzles_status,
             puzzles::puzzles_next,
             puzzles::puzzles_next_own,

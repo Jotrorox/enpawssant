@@ -864,6 +864,44 @@ pub async fn db_add_game<R: Runtime>(
         .await
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedGames {
+    imported: u64,
+    duplicates: u64,
+    failed: u64,
+}
+
+/// Saves several games at once, e.g. ones fetched from Lichess or Chess.com. `source` names where
+/// they came from.
+#[tauri::command]
+pub async fn db_add_games<R: Runtime>(
+    app: AppHandle<R>,
+    db: State<'_, Database>,
+    games: Vec<Game>,
+    source: String,
+) -> Result<AddedGames, String> {
+    let mut added = AddedGames::default();
+    let records: Vec<GameRecord> = games
+        .iter()
+        .filter_map(|game| GameRecord::new(game).ok())
+        .collect();
+    added.failed = (games.len() - records.len()) as u64;
+    db.store
+        .run(&app, move |conn| {
+            let tx = conn.transaction()?;
+            for record in &records {
+                match record.insert(&tx, &source)? {
+                    Some(_) => added.imported += 1,
+                    None => added.duplicates += 1,
+                }
+            }
+            tx.commit()?;
+            Ok(added)
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn db_delete_game<R: Runtime>(
     app: AppHandle<R>,

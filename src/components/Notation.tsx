@@ -12,6 +12,7 @@ import {
 import { moveNumberPrefix } from "../chess/board";
 import { NAGS, type Nag, otherNagSymbols, qualityNag } from "../chess/nag";
 import { header } from "../chess/pgn";
+import type { ReviewNag } from "../chess/review";
 import { formatScore, type Score } from "../chess/score";
 import { type GameTree, isMainline, type NodeId, variationCount } from "../chess/tree";
 import type { GameSession } from "../game/session";
@@ -97,10 +98,25 @@ function layout(tree: GameTree): Block[] {
 
 type MenuState = { id: NodeId; x: number; y: number; trigger: HTMLElement };
 
+/** What would have been better than the current move, when it is an inaccuracy or worse. */
+export type BestMoveHint = {
+  nag: ReviewNag;
+  /** Missing until the engine has searched the position before the move. */
+  best?: {
+    /** The move with its number, e.g. `12... Nf6`. */
+    label: string;
+    /** Whether the move is already in the tree, as a variation. */
+    inTree: boolean;
+    /** Plays it as a variation (or goes to it) and moves there. */
+    play: () => void;
+  };
+};
+
 type NotationProps = {
   session: GameSession;
   /** Evaluation of the current position: the engine's, or the one the game was imported with. */
   score?: Score;
+  bestMove?: BestMoveHint;
 };
 
 export function Notation(props: NotationProps) {
@@ -224,6 +240,8 @@ export function Notation(props: NotationProps) {
         </Show>
       </div>
 
+      <Show when={props.bestMove}>{(hint) => <BestMove hint={hint()} />}</Show>
+
       <div class="mt-2 flex items-center gap-3 rounded-xl bg-blush-100/70 px-3.5 py-2 text-[12px]">
         <span class="font-bold text-ink/70">FEN</span>
         <span class="selectable truncate font-mono text-ink">{session().node().fen}</span>
@@ -285,6 +303,39 @@ function MoveToken(props: {
         </>
       )}
     </Show>
+  );
+}
+
+function BestMove(props: { hint: BestMoveHint }) {
+  const style = () => NAG_STYLES[props.hint.nag];
+  return (
+    <div
+      class="mt-2 flex min-h-10 items-center gap-2 rounded-xl border border-blush-200 bg-white py-1 pr-1.5 pl-3.5 text-[13px]"
+      aria-live="polite"
+    >
+      <span class={`font-bold ${style().text}`}>
+        {props.hint.nag} {style().label}
+      </span>
+      <Show
+        when={props.hint.best}
+        fallback={<span class="text-muted">· Step back to let Mochi find a better move.</span>}
+      >
+        {(best) => (
+          <>
+            <span class="min-w-0 truncate">
+              · <span class="font-bold">{best().label}</span> was best
+            </span>
+            <button
+              type="button"
+              onClick={() => best().play()}
+              class="ml-auto h-8 shrink-0 rounded-lg bg-blush-100 px-3 text-[13px] font-bold text-ink transition-colors hover:bg-blush-200"
+            >
+              {best().inTree ? "Go to variation" : "Add as variation"}
+            </button>
+          </>
+        )}
+      </Show>
+    </div>
   );
 }
 
