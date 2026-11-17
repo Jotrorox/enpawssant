@@ -4,8 +4,8 @@ A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, Solid
 
 > Early foundation: the board is fully playable, the bundled Stockfish (or any UCI engine) analyses
 > every position live, games can be imported and exported as PGN, kept in a local game database and
-> explored by position, you can play against Stockfish with a clock, and there are puzzles from the
-> Lichess puzzle database.
+> explored by position, you can play against Stockfish with a clock or on lichess.org, and there are
+> puzzles from the Lichess puzzle database.
 
 ## The board
 
@@ -32,9 +32,14 @@ Moving to another position stops the running search, waits for the engine to fin
 then starts the new one, so stale lines never reach the board. Checkmate and stalemate are answered
 without asking the engine.
 
-## Play vs Stockfish
+## Play
 
-The clock button in the board toolbar starts a game against Stockfish in a new tab.
+The **Play** section in the side rail starts every kind of game: against Stockfish on this machine,
+against the Lichess AI, or against people on lichess.org. Each game opens in its own tab, with the
+clocks, players and controls above the move list. The clock button in the board toolbar is a
+shortcut to a game against Stockfish.
+
+### Against Stockfish
 
 - Pick your colour (or a random one), the engine's strength as an **Elo** (Stockfish's
   `UCI_LimitStrength`, 1320–3190) or a **skill level** (0–20, where 20 is full strength), and a time
@@ -47,15 +52,48 @@ The clock button in the board toolbar starts a game against Stockfish in a new t
 - The clocks run in the app and keep running while another tab is open. Checkmate, stalemate,
   threefold repetition, the fifty-move rule and dead positions end the game automatically; running
   out of time loses unless the other side has nothing left to mate with. Resigning takes two clicks.
-- You can step back through the moves meanwhile; the board takes your move again once you're back
-  at the end.
-- **Fair play**: while any game is in progress the whole app plays fair, not just the game's tab.
-  Live analysis (including an engine running alongside), the eval bar and graph, arrows, the
-  opening explorer and full-game analysis are off in every tab, and so is every way of getting the
-  position out: Copy FEN, Export PGN and the database's **Board position** button. Other tabs say
-  where the game is and take you back to it. Everything returns as soon as the game ends.
-- The game is an ordinary tab: its result and time control go into the PGN headers, and when it
-  ends everything is there to analyse it.
+
+### On Lichess
+
+Games on lichess.org are played through the [Board API](https://lichess.org/api#tag/Board) and
+need a free Lichess account. Signing in asks for permission to play games and to send and answer
+challenges (`board:play`, `challenge:read`, `challenge:write`). Accounts signed in before playing
+was supported are asked to sign in once more; the old token is revoked.
+
+- **Lichess AI**: Stockfish on lichess.org at levels 1 to 8, at 5+3 up to 30+20 or unlimited.
+- **Play a person**: rapid, classical or correspondence games (the speeds Lichess lets apps play
+  people at), rated or casual. **Seek a game** finds anyone looking for the same game; a real-time
+  seek lasts until a game starts or you cancel it, and a correspondence seek stays up on Lichess
+  until someone takes it. **Challenge** sends a challenge to one player.
+- **Challenges** to you show up as they arrive (with a toast, and a badge on the Play icon) to
+  accept or decline; your own can be cancelled.
+- In a game, Lichess has the final word: the board shows your move straight away and takes it back
+  if Lichess refuses it. You can abort until both players have moved, resign (two clicks), offer or
+  accept a draw, ask for or accept a takeback, and claim the game when your opponent leaves.
+  Games against people have a chat.
+- **Reconnecting**: a game's tab reconnects by itself when the connection drops. Real-time games
+  still in progress reopen when the app starts (Lichess reports them as soon as it connects), and
+  open game tabs pick up where the game is now.
+- **Ongoing games** lists your real-time and correspondence games, whose turn it is and the time
+  left. Correspondence games stay there between moves; click one to open it. The Play icon counts
+  the correspondence games waiting for your move.
+
+Everything goes through Rust (`src-tauri/src/board.rs`): the token never reaches the frontend, and
+game IDs, moves and usernames are checked before they become part of a request. Streams (the
+account's events, each open game and real-time seeks) run as long as they're needed and are
+stopped when their tab closes or the seek is cancelled.
+
+### Fair play
+
+While any game is in progress the whole app plays fair, not just the game's tab. Live analysis
+(including an engine running alongside), the eval bar and graph, arrows, the opening explorer and
+full-game analysis are off in every tab, and so is every way of getting the position out: Copy FEN,
+Export PGN and the database's **Board position** button. Other tabs say where the game is and take
+you back to it. Everything returns as soon as the game ends. An open correspondence game counts as
+in progress, so close its tab to analyse other games between moves.
+
+You can step back through the moves during a game; the board takes your move again once you're
+back at the end. A game's result and time control go into the PGN headers.
 
 ## Games
 
@@ -93,9 +131,9 @@ with how often each was played and how those games ended.
   Click a move to play it; moves already in the game tree are highlighted.
 - Lichess only answers signed-in requests, so the explorer asks you to **sign in with Lichess**
   once. This uses OAuth with PKCE: lichess.org opens in your browser and redirects back to a
-  one-shot listener on `127.0.0.1`. The token, which grants no permissions beyond reading public
-  data, is kept in the macOS Keychain or Windows Credential Manager and never reaches the frontend.
-  **Sign out** revokes it.
+  one-shot listener on `127.0.0.1`. The token, which also lets you play (see
+  [On Lichess](#on-lichess)), is kept in the macOS Keychain or Windows Credential Manager and never
+  reaches the frontend. **Sign out** revokes it.
 - Results are cached for the session, and requests wait until you stop stepping through moves.
   After Lichess rate limits the app, requests pause for a minute.
 - **My games** shows the same statistics for the games in your local database, no account needed.
@@ -201,12 +239,13 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 ├── src/                    # SolidJS + TypeScript frontend
 │   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
 │   ├── chess/              # Board helpers, rules, game endings, move tree, PGN, engines, database, puzzles
-│   ├── components/         # Board, panels and the side-rail sections (Files, Database, Engines, Purrzles)
-│   └── game/               # Game sessions, games against the engine and their clocks
+│   ├── components/         # Board, panels and the side-rail sections (Play, Database, Engines, …)
+│   └── game/               # Game sessions, games against Stockfish and on Lichess, clocks
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
+    │   ├── board.rs        # Playing on Lichess: event, game and seek streams, moves, challenges
     │   ├── database.rs     # Game database: import, search, position index, "My games" explorer
     │   ├── engine.rs       # UCI engine sessions: analysis engines and the opponent you play against
     │   ├── engines.rs      # Engine setup: added engines, options, analysis roles

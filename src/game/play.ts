@@ -203,7 +203,9 @@ export function createEngineGame(session: GameSession, settings: PlaySettings) {
     onCleanup(() => clearInterval(timer));
 
     return {
+      kind: "engine" as const,
       settings,
+      color: () => settings.color,
       outcome,
       playing,
       /** Whether the engine is choosing its move. */

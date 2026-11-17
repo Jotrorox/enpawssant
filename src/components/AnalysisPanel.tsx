@@ -24,6 +24,7 @@ import {
 import { cancelSignIn, lichessAccount, markSignedOut, signIn, signOut } from "../chess/lichess";
 import { parseUciMove } from "../chess/rules";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
+import type { OnlineGame } from "../game/online";
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
@@ -60,8 +61,8 @@ type AnalysisPanelProps = {
   score?: Score;
   engineOn: boolean;
   onToggleEngine: () => void;
-  /** The game against the engine in this tab, if there is one. */
-  game?: EngineGame;
+  /** The game being played in this tab, if there is one. */
+  game?: EngineGame | OnlineGame;
   /** A game is in progress, here or in another tab: the engine and the explorer are off. */
   fairPlay: boolean;
   /** The game in progress when it is in another tab. */
@@ -540,7 +541,7 @@ function SignInPrompt(props: { error?: string }) {
     <EmptyState class="gap-3">
       <span>
         Lichess only shares its opening explorer with signed-in players. A free account is enough,
-        and EnPawssant can only read the explorer, never play or post as you.
+        and signing in also lets you play on lichess.org from the Play section.
       </span>
       <Show when={props.error}>
         {(error) => <span class="text-error">Mochi couldn't sign you in: {error()}.</span>}

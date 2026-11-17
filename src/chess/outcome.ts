@@ -1,6 +1,7 @@
 // How a game ends: by the rules (mate, stalemate, repetition, the fifty-move rule, dead positions)
 // or by a player (time, resignation). Draws by repetition and the fifty-move rule are applied
-// automatically, as they are against an engine on most sites.
+// automatically, as they are against an engine on most sites. Games on Lichess can also end by
+// agreement, by a player leaving, by being aborted before they really started or by the site.
 
 import type { Color } from "./board";
 import { hasLegalMoves, inCheck, type Position, parseFen } from "./rules";
@@ -13,9 +14,19 @@ export type Termination =
   | "fiftyMoves"
   | "insufficientMaterial"
   | "timeout"
-  | "resignation";
+  | "resignation"
+  /** Agreed, or claimed (e.g. by threefold repetition) on Lichess. */
+  | "draw"
+  /** The other player left and the game was claimed. */
+  | "abandonment"
+  /** Ended before both players moved; it has no result. */
+  | "aborted"
+  /** Lichess ended it for a fair-play violation. */
+  | "cheat"
+  | "other";
 
-export type Outcome = { result: GameResult; termination: Termination };
+/** `*` only for aborted games, which have no result. */
+export type Outcome = { result: GameResult | "*"; termination: Termination };
 
 const winFor = (side: Color): GameResult => (side === "w" ? "1-0" : "0-1");
 
@@ -102,10 +113,32 @@ export function describeOutcome(outcome: Outcome): string {
         : `${winner} wins on time.`;
     case "resignation":
       return `${outcome.result === "1-0" ? "Black" : "White"} resigned. ${winner} wins.`;
+    case "draw":
+      return "It's a draw.";
+    case "abandonment":
+      return outcome.result === "1/2-1/2"
+        ? "The game was left and claimed as a draw."
+        : `The game was left. ${winner} wins.`;
+    case "aborted":
+      return "The game was aborted.";
+    case "cheat":
+      return `Lichess ended the game. ${winner} wins.`;
+    case "other":
+      return outcome.result === "1/2-1/2" ? "The game ended in a draw." : `${winner} wins.`;
   }
 }
 
 /** The PGN `Termination` tag for an outcome. */
 export function pgnTermination(outcome: Outcome): string {
-  return outcome.termination === "timeout" ? "time forfeit" : "normal";
+  switch (outcome.termination) {
+    case "timeout":
+      return "time forfeit";
+    case "abandonment":
+    case "aborted":
+      return "abandoned";
+    case "cheat":
+      return "rules infraction";
+    default:
+      return "normal";
+  }
 }

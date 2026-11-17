@@ -4,6 +4,7 @@ import {
   createMemo,
   createSignal,
   Match,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -22,7 +23,9 @@ import {
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import { enginesConfig, loadEngines } from "./chess/engines";
 import { readPgnFile, rememberFile } from "./chess/files";
-import type { ImportedGame, ParsedPgn, PgnGame } from "./chess/pgn";
+import { lichessUsername } from "./chess/lichess";
+import { challengeDirection, timeControlName, toColor } from "./chess/lichessPlay";
+import { header, type ImportedGame, type ParsedPgn, type PgnGame } from "./chess/pgn";
 import { mainline } from "./chess/review";
 import type { Score } from "./chess/score";
 import type { NodeId } from "./chess/tree";
@@ -34,10 +37,13 @@ import { FilesView } from "./components/FilesView";
 import { PawIcon } from "./components/Icons";
 import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
 import { type NewGame, PlayDialog } from "./components/PlayDialog";
+import { PlayView } from "./components/PlayView";
 import { PuzzlesView } from "./components/PuzzlesView";
 import { type Section, SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState, type Toast, Toasts } from "./components/ui";
+import { lichessEvents } from "./game/lichessEvents";
+import { createOnlineGame, type OnlineGame } from "./game/online";
 import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/play";
 import { createGameSession, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
@@ -50,8 +56,13 @@ const TOAST_MS = 5000;
 /** Depth every position is searched to by "Analyze full game". */
 const REVIEW_DEPTH = 16;
 
-/** A workspace tab, the game open in it and the game being played against the engine there. */
-type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame };
+/** A workspace tab, the game open in it and the game being played there, if any. */
+type Tab = WorkspaceTab & {
+  session: GameSession;
+  game?: EngineGame | OnlineGame;
+  /** The Lichess game played in the tab. */
+  lichessId?: string;
+};
 
 export default function App() {
   let opened = 0;
@@ -75,13 +86,48 @@ export default function App() {
       },
     };
   };
+  /**
+   * A tab for a game on Lichess, from `game` (the moves known so far, e.g. from last time). Its
+   * title follows the players once the game has loaded.
+   */
+  const createOnlineTab = (
+    id: string,
+    options: { color?: Color; game?: PgnGame; position?: number[] } = {},
+  ): Tab => {
+    const tab = createTab(
+      options.game ?? { headers: [], startFen: START_FEN, moves: [] },
+      "Lichess game",
+      options.position,
+    );
+    const game = createOnlineGame(tab.session, id, {
+      username: lichessUsername,
+      color: options.color,
+    });
+    return {
+      ...tab,
+      game,
+      lichessId: id,
+      get title() {
+        return game.full() ? gameTitle({ headers: tab.session.headers() }) : "Lichess game";
+      },
+      get live() {
+        return game.playing();
+      },
+    };
+  };
   const createBoard = () => createTab({ headers: [], startFen: START_FEN, moves: [] }, "New board");
 
-  // Reopen the tabs from last time, or start on an empty board.
+  // Reopen the tabs from last time, or start on an empty board. Lichess games that were still on
+  // reconnect; the others reopen as ordinary games.
   const saved = loadWorkspace();
   const restored = (saved?.tabs ?? []).flatMap((tab) => {
     try {
-      return [createTab(tab.game, tab.title, tab.position)];
+      const unfinished = header(tab.game, "Result") === "*";
+      return [
+        tab.lichessId && unfinished
+          ? createOnlineTab(tab.lichessId, { game: tab.game, position: tab.position })
+          : createTab(tab.game, tab.title, tab.position),
+      ];
     } catch {
       // A game that no longer loads is dropped rather than blocking startup.
       return [];
@@ -128,6 +174,7 @@ export default function App() {
         title: tab.title,
         game: tab.session.toPgn(),
         position: tab.session.position(),
+        lichessId: tab.lichessId,
       })),
       active: Math.max(
         0,
@@ -160,6 +207,45 @@ export default function App() {
     setActiveId(id);
     setSection("board");
   };
+
+  /** Switches to the tab of Lichess game `id`, opening one if needed. */
+  const openOnlineGame = ({ id, color }: { id: string; color?: Color }) => {
+    const open = tabs().find((tab) => tab.lichessId === id);
+    if (open) selectTab(open.id);
+    else openTabs([createOnlineTab(id, { color })]);
+  };
+
+  // Games the user is waiting for (accepted or sent challenges) open in a tab when they start, as
+  // do real-time games, which can't wait: including those still on after a restart, since Lichess
+  // reports every ongoing game when the event stream connects. Correspondence games otherwise
+  // stay in the Play section's list.
+  const expectedGames = new Set<string>();
+  onMount(() => {
+    const stopGames = lichessEvents.onGameStart((game) => {
+      const expected = expectedGames.delete(game.gameId);
+      if (tabs().some((tab) => tab.lichessId === game.gameId)) return;
+      if (expected || game.speed !== "correspondence") {
+        openOnlineGame({ id: game.gameId, color: toColor(game.color) });
+      }
+    });
+    const stopChallenges = lichessEvents.onChallenge((challenge) => {
+      const username = lichessUsername();
+      if (!username || challengeDirection(challenge, username) !== "in") return;
+      notify(
+        `${challenge.challenger.name} challenges you to a ${timeControlName(challenge.timeControl)} game. Answer in the Play section.`,
+      );
+    });
+    onCleanup(() => {
+      stopGames();
+      stopChallenges();
+    });
+  });
+  const playBadge = () =>
+    lichessEvents.challenges().filter((challenge) => {
+      const username = lichessUsername();
+      return username && challengeDirection(challenge, username) === "in";
+    }).length +
+    lichessEvents.games().filter((game) => game.isMyTurn && game.speed === "correspondence").length;
 
   /** Opens games read from files: one game straight away, several in the game picker. */
   const openFiles = (parsed: ParsedPgn & { name?: string }) => {
@@ -280,9 +366,17 @@ export default function App() {
         }}
       />
       <div class="flex min-h-0 flex-1">
-        <SideRail active={section()} onSelect={setSection} />
+        <SideRail active={section()} onSelect={setSection} badges={{ play: playBadge() }} />
         <main class="min-w-0 flex-1">
           <Switch>
+            <Match when={section() === "play"}>
+              <PlayView
+                onPlayStockfish={() => setChoosingGame(true)}
+                onOpenGame={openOnlineGame}
+                onExpectGame={(id) => expectedGames.add(id)}
+                notify={notify}
+              />
+            </Match>
             <Match when={section() === "files"}>
               <FilesView
                 onOpenGames={openGames}
@@ -402,7 +496,7 @@ function count(n: number, noun: string): string {
 
 function GameWorkspace(props: {
   session: GameSession;
-  game?: EngineGame;
+  game?: EngineGame | OnlineGame;
   /** A game is in progress, in this tab or another: no engine, explorer or position export. */
   fairPlay: boolean;
   /** The game in progress when it is in another tab. */
@@ -414,7 +508,17 @@ function GameWorkspace(props: {
 }) {
   const session = props.session;
   const game = props.game;
-  const [orientation, setOrientation] = createSignal<Color>(game?.settings.color ?? "w");
+  const [orientation, setOrientation] = createSignal<Color>(game?.color() ?? "w");
+  // A Lichess game only says which side the user plays once it has loaded.
+  if (game?.kind === "online") {
+    createEffect(
+      on(
+        () => game.full() !== undefined && game.color(),
+        (side) => side && setOrientation(side),
+        { defer: true },
+      ),
+    );
+  }
   const fen = () => session.node().fen;
   /** The engine keeps its opinions to itself while any game is on. */
   const fairPlay = () => props.fairPlay;

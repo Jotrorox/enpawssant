@@ -1,3 +1,4 @@
+mod board;
 mod database;
 mod engine;
 mod engines;
@@ -101,6 +102,7 @@ pub fn run() {
         .manage(Opponent::new())
         .manage(Engines::default())
         .manage(Lichess::default())
+        .manage(board::Streams::default())
         .manage(Database::default())
         .manage(Puzzles::default())
         .invoke_handler(tauri::generate_handler![
@@ -141,6 +143,18 @@ pub fn run() {
             explorer::lichess_sign_in,
             explorer::lichess_cancel_sign_in,
             explorer::lichess_sign_out,
+            board::lichess_stream_events,
+            board::lichess_stream_game,
+            board::lichess_seek,
+            board::lichess_stream_stop,
+            board::lichess_challenge_ai,
+            board::lichess_challenge,
+            board::lichess_challenge_respond,
+            board::lichess_game_move,
+            board::lichess_game_action,
+            board::lichess_game_chat,
+            board::lichess_game_chat_history,
+            board::lichess_playing,
             puzzles::puzzles_status,
             puzzles::puzzles_next,
             puzzles::puzzles_record,
