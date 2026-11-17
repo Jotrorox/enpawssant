@@ -2,9 +2,10 @@
 
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
-> Early foundation: the board is fully playable, the bundled Stockfish analyses every position live,
-> games can be imported and exported as PGN, the opening explorer shows Lichess statistics and you
-> can play against Stockfish with a clock.
+> Early foundation: the board is fully playable, the bundled Stockfish (or any UCI engine) analyses
+> every position live, games can be imported and exported as PGN, kept in a local game database and
+> explored by position, you can play against Stockfish with a clock, and there are puzzles from the
+> Lichess puzzle database.
 
 ## The board
 
@@ -93,7 +94,62 @@ with how often each was played and how those games ended.
   **Sign out** revokes it.
 - Results are cached for the session, and requests wait until you stop stepping through moves.
   After Lichess rate limits the app, requests pause for a minute.
-- **My games** waits for a local game database.
+- **My games** shows the same statistics for the games in your local database, no account needed.
+
+## Files
+
+The **Files** section lists recently opened PGN files and has a folder browser that shows only
+folders and `.pgn` files. Choosing a file lists its games: open one, open them all, or add the whole
+file to the game database. PGN files can be dropped anywhere on the window: they open (with a game
+picker for several games), or are imported when the Database section is showing. The browser goes
+through Rust commands that only list folders and PGN files and only read `.pgn` files.
+
+## Game database
+
+Games live in SQLite (`games.sqlite` in the app data folder), with every main-line position keyed by
+its Zobrist hash (`crates/chess-core/src/index.rs`). That makes "every game that reached this
+position" a single index lookup, and transpositions count as the same position.
+
+- **Import PGN…** (or drop files) streams games in batches with progress, so files of any size work;
+  duplicates are skipped and an import can be stopped. **Add board game** and the database button in
+  the board toolbar save the game on the board.
+- Search by any text (players, event, site, opening; every word must match), player, opening or ECO,
+  result and position. **Board position** fills in the current FEN. Results open in a new tab, at the
+  searched position for position searches.
+- The title-bar search box (⌘K / Ctrl K) searches the database; a FEN searches by position.
+- Games without an `Opening` tag are named from the opening tables.
+
+## Engines
+
+The **Engines** section manages UCI engines: the bundled Stockfish plus any engine binary you add
+(it is started once to check that it speaks UCI and to read its options). For each engine:
+
+- every UCI option is editable (spins, checks, combos, strings); the engine restarts with new values.
+  `Threads` and `Hash` default to all cores but one and 256 MB unless you change them. Options the
+  app sets per search (`MultiPV` and friends) are not offered.
+- **Use for analysis** makes it the engine behind the lines, eval bar, arrows and full-game analysis.
+  The engine card on the board also has a menu to switch.
+- **Run alongside** starts a second engine on the same positions; its lines show under the main
+  engine's.
+
+The setup is kept in `engines.json` in the app config folder. Engines are only ever started from
+Rust; the frontend refers to them by ID and picks binaries through the native file dialog.
+
+## Purrzles
+
+Puzzles from the [Lichess puzzle database](https://database.lichess.org/#puzzles) (CC0). A starter
+pack of about 2,200 puzzles across every rating band is bundled
+(`crates/chess-core/data/puzzles`), so puzzles work offline right away. **Download all puzzles**
+fetches the full database (about 300 MB) and keeps the well-liked, often played ones (about
+1.3 million, similar size on disk).
+
+- **Rated**: puzzles near your puzzle rating, which moves (Elo) after the first try at each puzzle.
+  Wrong moves can be retried but count as a miss, as do hints (first the piece, then the move) and
+  the solution. Filter by theme, such as forks or mate in 2.
+- **Streak**: puzzles get harder with every solve; one mistake ends the run. Your best run is kept.
+- Any checkmate counts as the final move of a mating puzzle. **Analyze on the board** opens the
+  puzzle and its solution in a tab.
+- Progress lives in `puzzles.sqlite` in the app data folder; **Reset progress** forgets it.
 
 ## Prerequisites
 
@@ -135,21 +191,27 @@ machine into `src-tauri/binaries/` (git-ignored). Later runs reuse it; run
 ├── mise.toml               # Node/pnpm versions and project tasks
 ├── biome.json              # TS/JSON lint + format config
 ├── crates/
-│   └── chess-core/         # Chess logic, PGN and opening names, independent of Tauri
+│   └── chess-core/         # Chess logic, PGN, opening names, position keys and puzzles, independent of Tauri
 ├── scripts/
 │   └── fetch-stockfish.mjs # Downloads Stockfish as a Tauri sidecar
 ├── src/                    # SolidJS + TypeScript frontend
 │   ├── assets/pieces/      # cburnett piece SVGs (BSD, see README there)
-│   ├── chess/              # Board helpers, move rules, game endings, move tree, PGN, pieces, sounds
+│   ├── chess/              # Board helpers, rules, game endings, move tree, PGN, engines, database, puzzles
+│   ├── components/         # Board, panels and the side-rail sections (Files, Database, Engines, Purrzles)
 │   └── game/               # Game sessions, games against the engine and their clocks
 └── src-tauri/              # Tauri app (Rust backend)
     ├── binaries/           # Stockfish sidecar (downloaded, git-ignored)
     ├── capabilities/       # Frontend permissions (no shell access)
     ├── src/
-    │   ├── engine.rs       # Stockfish sessions: analysis and the opponent you play against
+    │   ├── database.rs     # Game database: import, search, position index, "My games" explorer
+    │   ├── engine.rs       # UCI engine sessions: analysis engines and the opponent you play against
+    │   ├── engines.rs      # Engine setup: added engines, options, analysis roles
     │   ├── explorer.rs     # Opening explorer and opening name commands
+    │   ├── files.rs        # File browser: places, folder listings, reading PGN files
     │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
     │   ├── pgn.rs          # PGN import/export commands and file dialogs
+    │   ├── puzzles.rs      # Puzzles: starter pack, rating, streaks, full database download
+    │   ├── store.rs        # SQLite files in the app data folder
     │   └── lib.rs          # Tauri setup and commands
     └── tauri.conf.json
 ```
@@ -161,5 +223,5 @@ backend through Tauri commands such as `engine_analyze` and `pgn_parse`.
 
 BSD 3-Clause, see [LICENSE](LICENSE). Stockfish is downloaded separately and is licensed under the GPLv3.
 The opening names come from [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings)
-(CC0). The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
+(CC0) and the puzzles from the [Lichess puzzle database](https://database.lichess.org/#puzzles) (CC0). The chess pieces are Colin M.L. Burnett's "cburnett" set, used under the BSD license; see
 [src/assets/pieces/README.md](src/assets/pieces/README.md).

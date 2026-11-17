@@ -1,4 +1,5 @@
 import { createEffect, createResource, createSignal, For, Show } from "solid-js";
+import { rememberFile } from "../chess/files";
 import {
   exportPgn,
   header,
@@ -17,6 +18,8 @@ const errorMessage = (error: unknown) => (typeof error === "string" ? error : St
 
 type ImportDialogProps = {
   open: boolean;
+  /** Games already read, e.g. from a dropped file: the dialog starts with the game picker. */
+  preset?: ParsedPgn & { name?: string };
   onClose: () => void;
   /** Opens the chosen games, e.g. in new tabs. */
   onOpen: (games: ImportedGame[]) => void;
@@ -36,7 +39,7 @@ export function ImportDialog(props: ImportDialogProps) {
     if (!props.open) return;
     setText("");
     setError(undefined);
-    setResult(undefined);
+    setResult(props.preset);
   });
 
   const open = (games: ImportedGame[]) => {
@@ -94,7 +97,13 @@ export function ImportDialog(props: ImportDialogProps) {
                 type="button"
                 class={SECONDARY_BUTTON}
                 disabled={busy()}
-                onClick={() => run(openPgnFile)}
+                onClick={() =>
+                  run(async () => {
+                    const opened = await openPgnFile();
+                    if (opened) rememberFile(opened);
+                    return opened;
+                  })
+                }
               >
                 <FolderIcon class="size-[18px]" />
                 Open file…
@@ -118,7 +127,7 @@ export function ImportDialog(props: ImportDialogProps) {
   );
 }
 
-function GamePicker(props: {
+export function GamePicker(props: {
   parsed: ParsedPgn & { name?: string };
   onOpen: (games: ImportedGame[]) => void;
 }) {

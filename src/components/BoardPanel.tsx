@@ -11,6 +11,7 @@ import {
   CheckIcon,
   ChessClockIcon,
   CopyIcon,
+  DatabaseIcon,
   ExportIcon,
   FirstIcon,
   FlipIcon,
@@ -41,6 +42,7 @@ type BoardPanelProps = {
   onMove?: (move: MoveInput) => void;
   onImport: () => void;
   onExport: () => void;
+  onSaveToDatabase: () => void;
   onPlay: () => void;
   /** Progress of the running full-game analysis, if one is running. */
   review?: ReviewProgress;
@@ -80,6 +82,7 @@ export function BoardPanel(props: BoardPanelProps) {
         onPly={props.onPly}
         onImport={props.onImport}
         onExport={props.onExport}
+        onSaveToDatabase={props.onSaveToDatabase}
         onPlay={props.onPlay}
         review={props.review}
         reviewDisabled={props.reviewDisabled}
@@ -168,6 +171,7 @@ function BoardToolbar(props: {
   onPly: (ply: number) => void;
   onImport: () => void;
   onExport: () => void;
+  onSaveToDatabase: () => void;
   onPlay: () => void;
   review?: ReviewProgress;
   reviewDisabled?: boolean;
@@ -206,6 +210,9 @@ function BoardToolbar(props: {
       </IconButton>
       <IconButton label="Export PGN" onClick={() => props.onExport()}>
         <ExportIcon />
+      </IconButton>
+      <IconButton label="Save to the game database" onClick={() => props.onSaveToDatabase()}>
+        <DatabaseIcon />
       </IconButton>
       <IconButton label="Play vs Stockfish" onClick={() => props.onPlay()}>
         <ChessClockIcon />

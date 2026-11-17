@@ -1,16 +1,18 @@
-import { createSignal, For, type JSX } from "solid-js";
+import { For, type JSX } from "solid-js";
 import { BoardIcon, DatabaseIcon, EngineIcon, FolderIcon, PuzzleIcon, SunIcon } from "./Icons";
 
-const SECTIONS: { id: string; label: string; icon: () => JSX.Element }[] = [
+export type Section = "board" | "database" | "engines" | "puzzles" | "files";
+
+const SECTIONS: { id: Section; label: string; icon: () => JSX.Element }[] = [
   { id: "board", label: "Board", icon: () => <BoardIcon class="size-[22px]" /> },
   { id: "database", label: "Database", icon: () => <DatabaseIcon class="size-[22px]" /> },
   { id: "engines", label: "Engines", icon: () => <EngineIcon class="size-[22px]" /> },
-  { id: "puzzles", label: "Puzzles", icon: () => <PuzzleIcon class="size-[22px]" /> },
+  { id: "puzzles", label: "Purrzles", icon: () => <PuzzleIcon class="size-[22px]" /> },
   { id: "files", label: "Files", icon: () => <FolderIcon class="size-[22px]" /> },
 ];
 
-export function SideRail() {
-  const [active, setActive] = createSignal("board");
+export function SideRail(props: { active: Section; onSelect: (section: Section) => void }) {
+  const active = () => props.active;
 
   return (
     <nav
@@ -24,7 +26,7 @@ export function SideRail() {
             title={section.label}
             aria-label={section.label}
             aria-current={active() === section.id ? "page" : undefined}
-            onClick={() => setActive(section.id)}
+            onClick={() => props.onSelect(section.id)}
             class={`grid size-[44px] place-items-center rounded-2xl transition-colors ${
               active() === section.id
                 ? "bg-white text-rose shadow-[0_2px_8px_rgb(224_112_143/0.25)]"

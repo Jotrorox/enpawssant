@@ -1,9 +1,10 @@
-// Frontend side of the Stockfish session in `src-tauri/src/engine.rs`.
+// Frontend side of the engine sessions in `src-tauri/src/engine.rs`.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { type Accessor, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { createStore } from "solid-js/store";
+import { type Accessor, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { type Arrow, fenTurn } from "./board";
+import { engineRevision } from "./engines";
 import { type GameResult, type Score, shareFor } from "./score";
 
 /** The values an engine option can take. */
@@ -11,8 +12,9 @@ export type StrengthRange = { min: number; max: number; default: number };
 
 export type EngineInfo = {
   name: string;
-  threads: number;
-  hashMb: number;
+  /** Only known for engines with `Threads` and `Hash` options. */
+  threads: number | null;
+  hashMb: number | null;
   /** The Elo range the engine can limit itself to, if it can. */
   elo: StrengthRange | null;
   /** The range of its skill levels, if it has them. */
@@ -54,7 +56,8 @@ type EngineEvent =
 /** Progress of a full-game review, in positions. */
 export type ReviewProgress = { done: number; total: number };
 
-export const fetchEngineInfo = () => invoke<EngineInfo>("engine_info");
+export const fetchEngineInfo = (engineId: string) =>
+  invoke<EngineInfo>("engine_info", { engineId });
 
 /** The evaluation of an analysed position: its best line's score, or its result. */
 export function positionScore(update: AnalysisUpdate | undefined): Score | undefined {
@@ -64,7 +67,8 @@ export function positionScore(update: AnalysisUpdate | undefined): Score | undef
 }
 
 /**
- * Analyses `fen()` while `enabled()`, starting a new search whenever the position changes.
+ * Analyses `fen()` with engine `engineId()` while `enabled()`, starting a new search whenever the
+ * position changes. Without an engine nothing is analysed.
  *
  * Keeps the deepest analysis seen for every position, so revisiting one shows what is already
  * known while the engine catches up, and the eval graph can plot every analysed ply.
@@ -73,6 +77,7 @@ export function positionScore(update: AnalysisUpdate | undefined): Score | undef
  * runs, since there is only one engine, and picks up the current position when it ends.
  */
 export function createEngineAnalysis(options: {
+  engineId: Accessor<string | undefined>;
   fen: Accessor<string>;
   enabled: Accessor<boolean>;
   multipv: number;
@@ -102,17 +107,35 @@ export function createEngineAnalysis(options: {
     }
   };
 
+  // Another engine (or the same one with new options) judges positions differently, so what the
+  // previous one found is dropped.
+  createEffect(
+    on(
+      () => [options.engineId(), options.engineId() && engineRevision(options.engineId() ?? "")],
+      () => {
+        setByFen(reconcile({}));
+        reviewedDepth.clear();
+      },
+      { defer: true },
+    ),
+  );
+
   createEffect(() => {
     const fen = options.fen();
     const enabled = options.enabled();
+    const engineId = options.engineId();
+    if (engineId) engineRevision(engineId);
     const search = ++generation;
     // The review owns the engine; its requests replace whatever was running.
     if (reviewing()) return;
     setError(undefined);
+    if (!engineId) return;
     if (!enabled) {
-      void invoke("engine_stop").catch(() => {});
+      void invoke("engine_stop", { engineId }).catch(() => {});
       return;
     }
+    // An engine that loses its role is stopped by `engines_set_roles` in Rust; stopping it here
+    // could also stop it in the role it just took on.
 
     const channel = new Channel<EngineEvent>();
     channel.onmessage = (event) => {
@@ -125,7 +148,7 @@ export function createEngineAnalysis(options: {
       }
       // A live search is only ever `done` because it was replaced or stopped.
     };
-    invoke("engine_analyze", { fen, multipv: options.multipv, onEvent: channel }).catch(
+    invoke("engine_analyze", { engineId, fen, multipv: options.multipv, onEvent: channel }).catch(
       (reason) => {
         if (search === generation) setError(String(reason));
       },
@@ -135,11 +158,12 @@ export function createEngineAnalysis(options: {
   onCleanup(() => {
     generation++;
     reviewRun++;
-    void invoke("engine_stop").catch(() => {});
+    const engineId = options.engineId();
+    if (engineId) void invoke("engine_stop", { engineId }).catch(() => {});
   });
 
   /** Searches `fen` to `depth`, resolving with whether the search got there. */
-  const searchToDepth = (fen: string, depth: number) =>
+  const searchToDepth = (engineId: string, fen: string, depth: number) =>
     new Promise<boolean>((resolve, reject) => {
       const channel = new Channel<EngineEvent>();
       channel.onmessage = (event) => {
@@ -152,7 +176,9 @@ export function createEngineAnalysis(options: {
           reject(new Error(event.message));
         }
       };
-      invoke("engine_analyze", { fen, multipv: 1, depth, onEvent: channel }).catch(reject);
+      invoke("engine_analyze", { engineId, fen, multipv: 1, depth, onEvent: channel }).catch(
+        reject,
+      );
     });
 
   const searchedTo = (fen: string, depth: number) => {
@@ -167,13 +193,15 @@ export function createEngineAnalysis(options: {
    * Resolves with each position's evaluation, or `undefined` when cancelled or the engine failed.
    */
   const review = async (fens: readonly string[], depth: number) => {
+    const engineId = options.engineId();
+    if (!engineId) return undefined;
     const run = ++reviewRun;
     setReviewError(undefined);
     setProgress({ done: 0, total: fens.length });
     try {
       for (const [index, fen] of fens.entries()) {
         if (!searchedTo(fen, depth)) {
-          const complete = await searchToDepth(fen, depth);
+          const complete = await searchToDepth(engineId, fen, depth);
           if (run !== reviewRun || !complete) return undefined;
           reviewedDepth.set(fen, Math.max(depth, reviewedDepth.get(fen) ?? 0));
         }

@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
 import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
+import { engineRevision, enginesConfig, setEngineRoles } from "../chess/engines";
 import {
   createExplorer,
   type ExplorerError,
@@ -39,13 +40,22 @@ const PANEL_TABS = [
   { value: "info", label: "Info" },
 ] as const;
 
+/** What one engine found for the current position. */
+export type EngineView = {
+  id: string;
+  analysis?: AnalysisUpdate;
+  error?: string;
+};
+
 type AnalysisPanelProps = {
   session: GameSession;
-  analysis?: AnalysisUpdate;
+  /** The engine that analyses the board. */
+  primary: EngineView;
+  /** An engine analysing alongside it, if one is set up. */
+  secondary?: EngineView;
   /** Evaluation of the current position: the engine's, or the one the game was imported with. */
   score?: Score;
   engineOn: boolean;
-  engineError?: string;
   onToggleEngine: () => void;
   /** The game against the engine in this tab, if there is one. */
   game?: EngineGame;
@@ -56,7 +66,11 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
   const fen = () => props.session.node().fen;
   const [tab, setTab] = createSignal<PanelTab>("analysis");
   // Lives here rather than in the engine card so switching panels doesn't restart the engine.
-  const [engine] = createResource(fetchEngineInfo);
+  // Asking again after the engine restarts with new options picks up its new settings.
+  const [engine] = createResource(
+    () => [props.primary.id, engineRevision(props.primary.id)] as const,
+    ([id]) => fetchEngineInfo(id),
+  );
 
   return (
     <div class="flex min-h-0 min-w-0 flex-col gap-3 pt-3.5 pr-3.5 pb-3.5">
@@ -85,10 +99,12 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         <Show when={!props.game?.playing()}>
           <EngineCard
             engine={engine}
+            engineId={props.primary.id}
             fen={fen()}
-            analysis={props.analysis}
+            analysis={props.primary.analysis}
             enabled={props.engineOn}
-            error={props.engineError}
+            error={props.primary.error}
+            secondary={props.secondary}
             onToggle={props.onToggleEngine}
           />
           <ExplorerCard session={props.session} />
@@ -104,10 +120,12 @@ const LINE_MOVES = 12;
 
 type EngineCardProps = {
   engine: Resource<EngineInfo>;
+  engineId: string;
   fen: string;
   analysis?: AnalysisUpdate;
   enabled: boolean;
   error?: string;
+  secondary?: EngineView;
   onToggle: () => void;
 };
 
@@ -139,8 +157,9 @@ function EngineCard(props: EngineCardProps) {
         <div class="flex min-w-0 items-baseline gap-2" aria-live="polite">
           <Switch>
             <Match when={engine.error}>
-              <span class="text-[14px] font-bold text-error" title={String(engine.error)}>
-                Engine unavailable
+              <EnginePicker engineId={props.engineId} />
+              <span class="truncate text-[13px] font-bold text-error" title={String(engine.error)}>
+                Unavailable
               </span>
             </Match>
             <Match when={engine.loading}>
@@ -149,11 +168,8 @@ function EngineCard(props: EngineCardProps) {
             <Match when={engine()}>
               {(info) => (
                 <>
-                  <span class="text-[15px] font-bold whitespace-nowrap">{info().name}</span>
-                  <span class="truncate text-[12px] text-muted">
-                    NNUE · {info().threads} {info().threads === 1 ? "thread" : "threads"} ·{" "}
-                    {info().hashMb} MB
-                  </span>
+                  <EnginePicker engineId={props.engineId} fallback={info().name} />
+                  <span class="truncate text-[12px] text-muted">{engineDetails(info())}</span>
                 </>
               )}
             </Match>
@@ -192,53 +208,135 @@ function EngineCard(props: EngineCardProps) {
         <Match when={props.analysis}>
           {(analysis) => (
             <>
-              <ol class="flex flex-col gap-1">
-                <For each={analysis().lines}>
-                  {(line, index) => (
-                    <li
-                      class={`flex items-center gap-3 rounded-xl px-1.5 py-1 ${
-                        index() === 0 ? "bg-blush-100/80" : ""
-                      }`}
-                    >
-                      <span class="shrink-0 rounded-lg border border-blush-200 bg-white px-2 py-px font-mono text-[12px]">
-                        {formatScore(line.score)}
-                      </span>
-                      <span class="truncate text-[14px]">
-                        <For each={line.san.slice(0, LINE_MOVES)}>
-                          {(san, i) => {
-                            const prefix = moveNumberPrefix(
-                              fenPlyIndex(props.fen) + i(),
-                              i() === 0,
-                            );
-                            return (
-                              <span class={i() === 0 ? "font-bold" : ""}>
-                                {i() > 0 ? " " : ""}
-                                {prefix ? `${prefix} ` : ""}
-                                {san}
-                              </span>
-                            );
-                          }}
-                        </For>
-                      </span>
-                    </li>
-                  )}
-                </For>
-              </ol>
+              <EngineLines analysis={analysis()} fen={props.fen} />
 
-              <div class="mt-3 flex items-start gap-3 rounded-2xl bg-lavender px-3.5 py-2.5 text-[13px] leading-snug">
-                <span class="grid size-7 shrink-0 place-items-center rounded-full bg-white text-ink">
-                  <CatIcon class="size-[18px]" />
-                </span>
-                <p class="mt-0.5">
-                  <span class="font-bold">Coach Mochi:</span> {coachSays(analysis())}
-                </p>
-              </div>
+              <Show
+                when={props.secondary}
+                fallback={
+                  <div class="mt-3 flex items-start gap-3 rounded-2xl bg-lavender px-3.5 py-2.5 text-[13px] leading-snug">
+                    <span class="grid size-7 shrink-0 place-items-center rounded-full bg-white text-ink">
+                      <CatIcon class="size-[18px]" />
+                    </span>
+                    <p class="mt-0.5">
+                      <span class="font-bold">Coach Mochi:</span> {coachSays(analysis())}
+                    </p>
+                  </div>
+                }
+              >
+                {(second) => <SecondaryLines engine={second()} fen={props.fen} />}
+              </Show>
             </>
           )}
         </Match>
       </Switch>
     </Card>
   );
+}
+
+/** Lines of `analysis` as a list, the best one highlighted. */
+function EngineLines(props: { analysis: AnalysisUpdate; fen: string; limit?: number }) {
+  return (
+    <ol class="flex flex-col gap-1">
+      <For each={props.analysis.lines.slice(0, props.limit)}>
+        {(line, index) => (
+          <li
+            class={`flex items-center gap-3 rounded-xl px-1.5 py-1 ${
+              index() === 0 ? "bg-blush-100/80" : ""
+            }`}
+          >
+            <span class="shrink-0 rounded-lg border border-blush-200 bg-white px-2 py-px font-mono text-[12px]">
+              {formatScore(line.score)}
+            </span>
+            <span class="truncate text-[14px]">
+              <For each={line.san.slice(0, LINE_MOVES)}>
+                {(san, i) => {
+                  const prefix = moveNumberPrefix(fenPlyIndex(props.fen) + i(), i() === 0);
+                  return (
+                    <span class={i() === 0 ? "font-bold" : ""}>
+                      {i() > 0 ? " " : ""}
+                      {prefix ? `${prefix} ` : ""}
+                      {san}
+                    </span>
+                  );
+                }}
+              </For>
+            </span>
+          </li>
+        )}
+      </For>
+    </ol>
+  );
+}
+
+/** Lines of the engine running alongside the main one. */
+function SecondaryLines(props: { engine: EngineView; fen: string }) {
+  const name = () =>
+    enginesConfig.engines.find((engine) => engine.id === props.engine.id)?.name ?? "Second engine";
+  const analysis = () =>
+    props.engine.analysis?.fen === props.fen && !props.engine.analysis.outcome
+      ? props.engine.analysis
+      : undefined;
+  return (
+    <div class="mt-3 border-t border-blush-200 pt-2.5">
+      <div class="mb-1.5 flex items-center gap-2 px-1.5">
+        <span class="size-2 rounded-full bg-nag-interesting" aria-hidden="true" />
+        <span class="truncate text-[13px] font-bold">{name()}</span>
+        <Show when={analysis()}>
+          {(current) => (
+            <span class="ml-auto shrink-0 rounded-md bg-blush-100 px-1.5 py-0.5 font-mono text-[11px] text-ink/80">
+              depth {current().depth}
+            </span>
+          )}
+        </Show>
+      </div>
+      <Switch>
+        <Match when={props.engine.error}>
+          {(error) => <p class="px-1.5 text-[13px] text-error">{error()}</p>}
+        </Match>
+        <Match when={analysis()?.lines.length}>
+          <EngineLines analysis={analysis() as AnalysisUpdate} fen={props.fen} limit={2} />
+        </Match>
+        <Match when={true}>
+          <p class="px-1.5 text-[13px] text-muted">Thinking…</p>
+        </Match>
+      </Switch>
+    </div>
+  );
+}
+
+/** The engine's name, as a menu to switch engines when there is more than one. */
+function EnginePicker(props: { engineId: string; fallback?: string }) {
+  const engines = () => enginesConfig.engines;
+  const name = () =>
+    engines().find((e) => e.id === props.engineId)?.name ?? props.fallback ?? "Engine";
+  return (
+    <Show
+      when={engines().length > 1}
+      fallback={<span class="text-[15px] font-bold whitespace-nowrap">{name()}</span>}
+    >
+      <select
+        aria-label="Analysis engine"
+        value={props.engineId}
+        onChange={(event) => {
+          const id = event.currentTarget.value;
+          const secondary = enginesConfig.secondary === id ? null : enginesConfig.secondary;
+          void setEngineRoles(id, secondary).catch(() => {});
+        }}
+        class="max-w-[180px] shrink-0 cursor-pointer truncate rounded-lg bg-transparent py-0.5 pr-1 text-[15px] font-bold outline-none hover:bg-blush-100 focus-visible:ring-2 focus-visible:ring-rose"
+      >
+        <For each={engines()}>{(engine) => <option value={engine.id}>{engine.name}</option>}</For>
+      </select>
+    </Show>
+  );
+}
+
+function engineDetails(info: EngineInfo): string {
+  const parts: string[] = [];
+  if (info.name.startsWith("Stockfish")) parts.push("NNUE");
+  if (info.threads !== null)
+    parts.push(`${info.threads} ${info.threads === 1 ? "thread" : "threads"}`);
+  if (info.hashMb !== null) parts.push(`${info.hashMb} MB`);
+  return parts.join(" · ");
 }
 
 function formatNps(nps: number): string {
@@ -291,8 +389,9 @@ function ExplorerCard(props: { session: GameSession }) {
   const account = lichessAccount;
   const explorer = createExplorer({
     fen: () => session.node().fen,
-    source: () => (tab() === "lichess" ? "lichess" : "masters"),
-    enabled: () => tab() !== "mine" && account().status === "signedIn",
+    source: tab,
+    // Your own games need no Lichess account.
+    enabled: () => tab() === "mine" || account().status === "signedIn",
     onSignedOut: markSignedOut,
   });
   const lineFens = () =>
@@ -337,10 +436,16 @@ function ExplorerCard(props: { session: GameSession }) {
       </p>
 
       <Switch>
-        <Match when={tab() === "mine"}>
-          <EmptyState>
-            Your own games will show up here once EnPawssant keeps a game database.
-          </EmptyState>
+        <Match when={tab() === "mine" && explorer.state()}>
+          {(state) => (
+            <ExplorerResults
+              state={state()}
+              local
+              knownMoves={knownMoves()}
+              onPlay={play}
+              onRetry={explorer.retry}
+            />
+          )}
         </Match>
         <Match when={account().status === "loading"}>
           <EmptyState>Checking for your Lichess account…</EmptyState>
@@ -416,6 +521,8 @@ function SignInPrompt(props: { error?: string }) {
 
 type ExplorerResultsProps = {
   state: ExplorerState;
+  /** Results come from the local game database rather than Lichess. */
+  local?: boolean;
   knownMoves: Set<string | undefined>;
   onPlay: (uci: string) => void;
   onRetry: () => void;
@@ -436,7 +543,9 @@ function ExplorerResults(props: ExplorerResultsProps) {
         {(error) => (
           <EmptyState class="gap-3">
             <span class={error().kind === "failed" ? "text-error" : ""}>
-              {explorerErrorMessage(error())}
+              {props.local && error().kind === "failed"
+                ? `Mochi couldn't read your games: ${(error() as { message: string }).message}.`
+                : explorerErrorMessage(error())}
             </span>
             <Show when={error().kind !== "signedOut"}>
               <button type="button" class={SECONDARY_BUTTON} onClick={() => props.onRetry()}>
@@ -450,7 +559,11 @@ function ExplorerResults(props: ExplorerResultsProps) {
         <EmptyState>Mochi is fetching the games…</EmptyState>
       </Match>
       <Match when={result()?.moves.length === 0}>
-        <EmptyState>No games reached this position yet.</EmptyState>
+        <EmptyState>
+          {props.local
+            ? "None of your games reached this position. Import games in the Database section."
+            : "No games reached this position yet."}
+        </EmptyState>
       </Match>
       <Match when={result()}>
         {(result) => (

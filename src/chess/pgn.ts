@@ -36,7 +36,7 @@ export type ParsedPgn = {
   truncated: boolean;
 };
 
-export type OpenedPgn = ParsedPgn & { name: string };
+export type OpenedPgn = ParsedPgn & { name: string; path: string };
 
 export const parsePgn = (text: string) => invoke<ParsedPgn>("pgn_parse", { text });
 

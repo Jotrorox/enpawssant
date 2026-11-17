@@ -75,6 +75,17 @@
     cursor: default;
   }
 
+  /* Number fields are typed into; the native steppers would cover their values. */
+  input[type="number"] {
+    appearance: textfield;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
   :focus-visible {
     outline: 2px solid var(--color-rose);
     outline-offset: 2px;
@@ -91,6 +102,11 @@
    (cat ears), so the height limit is 100cqh + 10px. */
 @utility board-fit {
   width: min(100cqw, calc(100cqh + 10px));
+}
+
+/* The same for a board without an eval bar next to it, e.g. in puzzles. */
+@utility board-fit-solo {
+  width: min(100cqw, calc(100cqh - 30px));
 }
 
 /* Board pieces. The outer element is positioned on its square; the inner image handles lifting,

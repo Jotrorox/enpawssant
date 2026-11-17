@@ -3,8 +3,10 @@
 //! This crate must stay independent of Tauri so it can be tested and reused
 //! without the desktop shell.
 
+pub mod index;
 pub mod openings;
 pub mod pgn;
+pub mod puzzle;
 pub mod uci;
 
 use std::fmt;

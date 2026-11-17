@@ -28,23 +28,23 @@ pub enum ExplorerSource {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplorerResult {
-    white: u64,
-    draws: u64,
-    black: u64,
+    pub(crate) white: u64,
+    pub(crate) draws: u64,
+    pub(crate) black: u64,
     /// Most played first.
-    moves: Vec<ExplorerMove>,
+    pub(crate) moves: Vec<ExplorerMove>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplorerMove {
     /// Standard UCI (castling as `e1g1`).
-    uci: String,
-    san: String,
-    white: u64,
-    draws: u64,
-    black: u64,
-    average_rating: Option<u32>,
+    pub(crate) uci: String,
+    pub(crate) san: String,
+    pub(crate) white: u64,
+    pub(crate) draws: u64,
+    pub(crate) black: u64,
+    pub(crate) average_rating: Option<u32>,
 }
 
 /// The parts of an explorer API response we use.

@@ -1,5 +1,7 @@
 //! Parsing of the engine-to-GUI side of the UCI protocol.
 
+use serde::{Deserialize, Serialize};
+
 /// An engine score as UCI reports it.
 ///
 /// Whose point of view it is from depends on context: the engine reports scores
@@ -118,6 +120,164 @@ pub fn is_bestmove(line: &str) -> bool {
     line.split_whitespace().next() == Some("bestmove")
 }
 
+/// An option an engine offers in its `option` lines, e.g. `Hash` or `Skill Level`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UciOption {
+    pub name: String,
+    #[serde(flatten)]
+    pub kind: OptionKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OptionKind {
+    Check {
+        default: bool,
+    },
+    Spin {
+        default: i64,
+        min: i64,
+        max: i64,
+    },
+    Combo {
+        default: String,
+        choices: Vec<String>,
+    },
+    /// Triggers an action, e.g. `Clear Hash`; it has no value.
+    Button,
+    String {
+        default: String,
+    },
+}
+
+impl UciOption {
+    /// The default value as it would be sent with `setoption`, or `None` for buttons.
+    pub fn default_value(&self) -> Option<String> {
+        match &self.kind {
+            OptionKind::Check { default } => Some(default.to_string()),
+            OptionKind::Spin { default, .. } => Some(default.to_string()),
+            OptionKind::Combo { default, .. } | OptionKind::String { default } => {
+                Some(default.clone())
+            }
+            OptionKind::Button => None,
+        }
+    }
+
+    /// Checks a value for this option and brings it into the form engines expect: spins are
+    /// clamped to their range and combo values take the engine's spelling.
+    pub fn normalize(&self, value: &str) -> Result<String, String> {
+        let value = value.trim();
+        match &self.kind {
+            OptionKind::Check { .. } => match value.to_ascii_lowercase().as_str() {
+                "true" => Ok("true".into()),
+                "false" => Ok("false".into()),
+                _ => Err(format!("{} must be true or false", self.name)),
+            },
+            OptionKind::Spin { min, max, .. } => value
+                .parse::<i64>()
+                .map(|n| n.clamp(*min, (*max).max(*min)).to_string())
+                .map_err(|_| format!("{} must be a whole number", self.name)),
+            OptionKind::Combo { choices, .. } => choices
+                .iter()
+                .find(|choice| choice.eq_ignore_ascii_case(value))
+                .cloned()
+                .ok_or_else(|| format!("{value} is not a choice for {}", self.name)),
+            // A line break would end the `setoption` command and start another one.
+            OptionKind::String { .. } if value.contains(['\n', '\r']) => {
+                Err(format!("{} must fit on one line", self.name))
+            }
+            OptionKind::String { .. } => Ok(value.to_owned()),
+            OptionKind::Button => Err(format!("{} has no value", self.name)),
+        }
+    }
+
+    /// The `setoption` command that sets this option to `value`, which must be normalised.
+    pub fn set_command(&self, value: &str) -> String {
+        match self.kind {
+            OptionKind::Button => format!("setoption name {}", self.name),
+            // UCI has no way to send an empty string, so `<empty>` stands for one.
+            OptionKind::String { .. } if value.is_empty() => {
+                format!("setoption name {} value <empty>", self.name)
+            }
+            _ => format!("setoption name {} value {value}", self.name),
+        }
+    }
+}
+
+/// Words that start a new field in an `option` line.
+const OPTION_KEYWORDS: &[&str] = &["name", "type", "default", "min", "max", "var"];
+
+/// Parses an `option` line. Returns `None` for any other line and for options that are malformed
+/// or of an unknown type.
+pub fn parse_option(line: &str) -> Option<UciOption> {
+    let mut tokens = line.split_whitespace().peekable();
+    if tokens.next()? != "option" || tokens.next()? != "name" {
+        return None;
+    }
+    // Names may contain spaces, so they run up to `type`.
+    let mut name = Vec::new();
+    while let Some(token) = tokens.next_if(|t| *t != "type") {
+        name.push(token);
+    }
+    tokens.next()?;
+    let kind = tokens.next()?;
+
+    let mut default: Option<String> = None;
+    let mut min = None;
+    let mut max = None;
+    let mut choices = Vec::new();
+    while let Some(keyword) = tokens.next() {
+        let mut words = Vec::new();
+        while let Some(word) = tokens.next_if(|t| !OPTION_KEYWORDS.contains(t)) {
+            words.push(word);
+        }
+        let value = words.join(" ");
+        match keyword {
+            "default" => default = Some(value),
+            "min" => min = Some(value.parse().ok()?),
+            "max" => max = Some(value.parse().ok()?),
+            "var" => choices.push(value),
+            _ => {}
+        }
+    }
+    let default_text = || match default.as_deref() {
+        None | Some("<empty>") => String::new(),
+        Some(text) => text.to_owned(),
+    };
+
+    let kind = match kind {
+        "check" => OptionKind::Check {
+            default: default.as_deref()?.eq_ignore_ascii_case("true"),
+        },
+        "spin" => OptionKind::Spin {
+            default: default.as_deref()?.parse().ok()?,
+            min: min?,
+            max: max?,
+        },
+        "combo" => OptionKind::Combo {
+            default: default_text(),
+            choices,
+        },
+        "button" => OptionKind::Button,
+        "string" => OptionKind::String {
+            default: default_text(),
+        },
+        _ => return None,
+    };
+    let name = name.join(" ");
+    (!name.is_empty()).then_some(UciOption { name, kind })
+}
+
+/// Extracts the value of an `id author <value>` line.
+pub fn parse_id_author(line: &str) -> Option<&str> {
+    let mut tokens = line.splitn(3, char::is_whitespace);
+    match (tokens.next(), tokens.next(), tokens.next()) {
+        (Some("id"), Some("author"), Some(value)) if !value.trim().is_empty() => Some(value.trim()),
+        _ => None,
+    }
+}
+
 /// The move of a `bestmove` line, or `None` for other lines and for
 /// `bestmove (none)`, which engines send when there is no legal move.
 pub fn parse_bestmove(line: &str) -> Option<&str> {
@@ -126,44 +286,6 @@ pub fn parse_bestmove(line: &str) -> Option<&str> {
         (Some("bestmove"), Some(mv)) if mv != "(none)" => Some(mv),
         _ => None,
     }
-}
-
-/// A numeric engine option, from an `option name <name> type spin ...` line.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SpinOption {
-    pub default: i64,
-    pub min: i64,
-    pub max: i64,
-}
-
-/// Parses an `option` line declaring a `spin` option. Returns its name and
-/// bounds, or `None` for any other line.
-pub fn parse_spin_option(line: &str) -> Option<(&str, SpinOption)> {
-    let rest = line.strip_prefix("option name ")?;
-    // Names may contain spaces, so the name runs up to the `type` keyword.
-    let (name, rest) = rest.split_once(" type ")?;
-    let mut tokens = rest.split_whitespace();
-    if tokens.next()? != "spin" {
-        return None;
-    }
-    let (mut default, mut min, mut max) = (None, None, None);
-    while let Some(keyword) = tokens.next() {
-        let value = tokens.next()?.parse().ok()?;
-        match keyword {
-            "default" => default = Some(value),
-            "min" => min = Some(value),
-            "max" => max = Some(value),
-            _ => {}
-        }
-    }
-    Some((
-        name.trim(),
-        SpinOption {
-            default: default?,
-            min: min?,
-            max: max?,
-        },
-    ))
 }
 
 #[cfg(test)]
@@ -230,46 +352,101 @@ mod tests {
     }
 
     #[test]
+    fn parses_options() {
+        assert_eq!(
+            parse_option("option name Hash type spin default 16 min 1 max 33554432"),
+            Some(UciOption {
+                name: "Hash".into(),
+                kind: OptionKind::Spin {
+                    default: 16,
+                    min: 1,
+                    max: 33_554_432
+                },
+            })
+        );
+        assert_eq!(
+            parse_option("option name Clear Hash type button"),
+            Some(UciOption {
+                name: "Clear Hash".into(),
+                kind: OptionKind::Button,
+            })
+        );
+        assert_eq!(
+            parse_option("option name Ponder type check default false"),
+            Some(UciOption {
+                name: "Ponder".into(),
+                kind: OptionKind::Check { default: false },
+            })
+        );
+        assert_eq!(
+            parse_option("option name Debug Log File type string default <empty>"),
+            Some(UciOption {
+                name: "Debug Log File".into(),
+                kind: OptionKind::String {
+                    default: String::new()
+                },
+            })
+        );
+        assert_eq!(
+            parse_option(
+                "option name Style type combo default Normal var Solid var Normal var Risky Play"
+            ),
+            Some(UciOption {
+                name: "Style".into(),
+                kind: OptionKind::Combo {
+                    default: "Normal".into(),
+                    choices: vec!["Solid".into(), "Normal".into(), "Risky Play".into()],
+                },
+            })
+        );
+        assert_eq!(parse_option("option name Broken type spin default x"), None);
+        assert_eq!(parse_option("option name Odd type colour"), None);
+        assert_eq!(parse_option("id name Stockfish"), None);
+    }
+
+    #[test]
+    fn normalizes_option_values() {
+        let threads =
+            parse_option("option name Threads type spin default 1 min 1 max 1024").unwrap();
+        assert_eq!(threads.normalize(" 4 ").unwrap(), "4");
+        assert_eq!(threads.normalize("5000").unwrap(), "1024");
+        assert!(threads.normalize("many").is_err());
+        assert_eq!(threads.set_command("4"), "setoption name Threads value 4");
+
+        let check = parse_option("option name Ponder type check default false").unwrap();
+        assert_eq!(check.normalize("TRUE").unwrap(), "true");
+        assert!(check.normalize("yes").is_err());
+
+        let combo =
+            parse_option("option name Style type combo default Normal var Solid var Normal")
+                .unwrap();
+        assert_eq!(combo.normalize("solid").unwrap(), "Solid");
+        assert!(combo.normalize("Wild").is_err());
+
+        let path = parse_option("option name SyzygyPath type string default <empty>").unwrap();
+        assert!(path.normalize("a\nquit").is_err());
+        assert_eq!(
+            path.set_command(""),
+            "setoption name SyzygyPath value <empty>"
+        );
+        assert_eq!(path.default_value().as_deref(), Some(""));
+    }
+
+    #[test]
+    fn parses_id_author() {
+        assert_eq!(
+            parse_id_author("id author the Stockfish developers"),
+            Some("the Stockfish developers")
+        );
+        assert_eq!(parse_id_author("id name Stockfish"), None);
+    }
+
+    #[test]
     fn parses_bestmove() {
         assert_eq!(parse_bestmove("bestmove e2e4 ponder e7e5"), Some("e2e4"));
         assert_eq!(parse_bestmove("bestmove e7e8q"), Some("e7e8q"));
         assert_eq!(parse_bestmove("bestmove (none)"), None);
         assert_eq!(parse_bestmove("bestmove"), None);
         assert_eq!(parse_bestmove("info pv e2e4"), None);
-    }
-
-    #[test]
-    fn parses_spin_options() {
-        assert_eq!(
-            parse_spin_option("option name UCI_Elo type spin default 1320 min 1320 max 3190"),
-            Some((
-                "UCI_Elo",
-                SpinOption {
-                    default: 1320,
-                    min: 1320,
-                    max: 3190
-                }
-            ))
-        );
-        assert_eq!(
-            parse_spin_option("option name Skill Level type spin default 20 min 0 max 20"),
-            Some((
-                "Skill Level",
-                SpinOption {
-                    default: 20,
-                    min: 0,
-                    max: 20
-                }
-            ))
-        );
-        assert_eq!(
-            parse_spin_option("option name UCI_LimitStrength type check default false"),
-            None
-        );
-        assert_eq!(
-            parse_spin_option("option name Clear Hash type button"),
-            None
-        );
-        assert_eq!(parse_spin_option("id name Stockfish 19"), None);
     }
 }

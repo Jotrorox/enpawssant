@@ -1,9 +1,10 @@
-//! Stockfish sidecar handling. Only Rust spawns the engine; the frontend has
-//! no shell permissions.
+//! UCI engine sessions: the bundled Stockfish sidecar and engines the user
+//! added (see `engines.rs`). Only Rust spawns engines; the frontend has no
+//! shell permissions.
 //!
-//! The engine runs as one long-lived session, started on first use. A task
-//! (the [`Actor`]) owns the process and receives `analyze`/`stop` commands
-//! through a channel. Each `analyze` comes with its own Tauri channel, and the
+//! Every engine runs as one long-lived session, started on first use, and
+//! several engines can analyse side by side. A task (the [`Actor`]) owns each
+//! process and receives `analyze`/`stop` commands through a channel. Each `analyze` comes with its own Tauri channel, and the
 //! actor streams throttled snapshots of that search to it with every line in
 //! SAN and every score from White's point of view.
 //!
@@ -11,7 +12,7 @@
 //! request asks for one (full-game analysis does). Either way its channel ends
 //! with a `done` event that says whether the search ran its course.
 //!
-//! Games against the engine use a second session of their own (the
+//! Games against the engine use a bundled Stockfish session of their own (the
 //! [`Opponent`]), so its playing strength never touches the analysis. Its
 //! searches play a move under a clock and end with the move in `done`.
 //!
@@ -20,20 +21,24 @@
 //! those lines and only then starts the next search. Requests that arrive in
 //! the meantime replace each other, so only the latest position gets searched.
 
+use std::collections::{BTreeMap, HashMap};
 use std::mem;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chess_core::shakmaty::KnownOutcome;
-use chess_core::uci::{self, Info, Score};
+use chess_core::uci::{self, Info, OptionKind, Score, UciOption};
 use chess_core::{AnalysisRoot, LineMove};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::{self, Receiver};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::process::{Command as ShellCommand, CommandChild, CommandEvent};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{MissedTickBehavior, timeout};
+
+use crate::engines::{Engines, MANAGED_OPTIONS};
 
 /// Must match the file name of the `externalBin` entry in `tauri.conf.json`.
 const SIDECAR: &str = "stockfish";
@@ -52,7 +57,7 @@ const FULL_SKILL: i64 = 20;
 const ELO_OPTION: &str = "UCI_Elo";
 const SKILL_OPTION: &str = "Skill Level";
 
-/// How a session sets up its engine.
+/// How a session sets up its engine, unless the user chose other values.
 #[derive(Copy, Clone, Debug)]
 struct Config {
     /// Use every core but one, leaving it for the UI; otherwise one thread.
@@ -81,8 +86,9 @@ const OPPONENT: Config = Config {
 #[serde(rename_all = "camelCase")]
 pub struct EngineInfo {
     name: String,
-    threads: u32,
-    hash_mb: u32,
+    /// The `Threads` and `Hash` settings, for engines that have them.
+    threads: Option<u32>,
+    hash_mb: Option<u32>,
     /// The Elo range the engine can limit itself to, if it can.
     elo: Option<StrengthRange>,
     /// The range of its skill levels, if it has them.
@@ -96,14 +102,38 @@ pub struct StrengthRange {
     default: i64,
 }
 
-impl From<uci::SpinOption> for StrengthRange {
-    fn from(option: uci::SpinOption) -> Self {
-        StrengthRange {
-            min: option.min,
-            max: option.max,
-            default: option.default,
-        }
+impl StrengthRange {
+    /// The range of the spin option called `name`, if the engine has one.
+    fn of(options: &[UciOption], name: &str) -> Option<StrengthRange> {
+        options.iter().find_map(|option| match option.kind {
+            OptionKind::Spin { default, min, max } if option.name == name => {
+                Some(StrengthRange { min, max, default })
+            }
+            _ => None,
+        })
     }
+}
+
+/// What an engine says about itself when it starts.
+#[derive(Clone, Debug)]
+pub struct Handshake {
+    pub name: String,
+    pub author: Option<String>,
+    pub options: Vec<UciOption>,
+}
+
+/// The program behind an engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Program {
+    Bundled,
+    Path(PathBuf),
+}
+
+/// How to start an engine: its program and the option values the user chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchSpec {
+    pub program: Program,
+    pub values: BTreeMap<String, String>,
 }
 
 /// How strongly the opponent plays.
@@ -248,18 +278,77 @@ impl From<Score> for WireScore {
     }
 }
 
-/// Tauri state holding the analysis engine session, if one is running.
+/// Tauri state holding the running analysis engine sessions, by engine ID.
 pub struct Engine {
-    session: Mutex<Option<Session>>,
+    sessions: Mutex<HashMap<String, Session>>,
     config: Config,
 }
 
-/// Tauri state holding the engine session that games are played against.
-pub struct Opponent(pub Engine);
+/// Tauri state holding the engine session that games are played against. It
+/// is always the bundled Stockfish with its default options, so the user's
+/// engine settings never change how it plays.
+pub struct Opponent(Engine);
+
+/// The key of the opponent's session.
+const OPPONENT_ID: &str = "opponent";
 
 impl Opponent {
     pub fn new() -> Self {
         Opponent(Engine::with_config(OPPONENT))
+    }
+
+    fn target() -> Target<'static> {
+        Target {
+            id: OPPONENT_ID,
+            spec: LaunchSpec {
+                program: Program::Bundled,
+                values: BTreeMap::new(),
+            },
+            engines: None,
+        }
+    }
+
+    /// Starts the engine if needed and describes it.
+    pub async fn info<R: Runtime>(&self, app: &AppHandle<R>) -> Result<EngineInfo, String> {
+        self.0.session_info(app, &Self::target()).await
+    }
+
+    /// Picks a move for the position after `moves` from `fen`, at `strength`
+    /// and under `clock` (or briefly without one). The move arrives in the
+    /// `done` event; the search can be stopped like any other.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn play<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        fen: String,
+        moves: Vec<String>,
+        strength: Strength,
+        clock: Option<Clock>,
+        new_game: bool,
+        channel: Channel<EngineEvent>,
+    ) -> Result<(), String> {
+        let root = AnalysisRoot::from_fen_and_moves(&fen, &moves).map_err(|e| e.to_string())?;
+        let info = self.info(app).await?;
+        let request = Request {
+            fen,
+            root,
+            multipv: 1,
+            go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
+            strength: strength.clamped(&info),
+            new_game,
+            channel,
+        };
+        self.0.submit(app, &Self::target(), request).await
+    }
+
+    /// Stops the current search. Does not start the engine.
+    pub async fn stop(&self) {
+        self.0.stop(OPPONENT_ID).await;
+    }
+
+    /// Asks the engine to quit and waits briefly for it.
+    pub async fn shutdown(&self) {
+        self.0.shutdown().await;
     }
 }
 
@@ -269,9 +358,33 @@ impl Default for Opponent {
     }
 }
 
+/// A session to use: its key, how to start it and, for engines from the
+/// registry, where to record what the engine reports.
+struct Target<'a> {
+    id: &'a str,
+    spec: LaunchSpec,
+    engines: Option<&'a Engines>,
+}
+
+impl<'a> Target<'a> {
+    fn from_registry<R: Runtime>(
+        app: &AppHandle<R>,
+        engines: &'a Engines,
+        id: &'a str,
+    ) -> Result<Target<'a>, String> {
+        Ok(Target {
+            id,
+            spec: engines.entry(app, id)?.launch_spec(),
+            engines: Some(engines),
+        })
+    }
+}
+
 struct Session {
     commands: mpsc::UnboundedSender<Command>,
     info: EngineInfo,
+    /// What the session was started with; a changed setup starts a new one.
+    spec: LaunchSpec,
 }
 
 enum Command {
@@ -325,25 +438,30 @@ impl Default for Engine {
 impl Engine {
     fn with_config(config: Config) -> Self {
         Engine {
-            session: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
             config,
         }
     }
 
-    /// Starts the engine if needed and describes it.
-    pub async fn info<R: Runtime>(&self, app: &AppHandle<R>) -> Result<EngineInfo, String> {
-        let mut session = self.session.lock().await;
-        Ok(ensure_session(&mut session, app, self.config)
-            .await?
-            .info
-            .clone())
+    /// Starts the engine `id` if needed and describes it.
+    pub async fn info<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        engines: &Engines,
+        id: &str,
+    ) -> Result<EngineInfo, String> {
+        let target = Target::from_registry(app, engines, id)?;
+        self.session_info(app, &target).await
     }
 
-    /// Searches `fen` to `depth`, or until told otherwise without one,
-    /// replacing the current search.
+    /// Searches `fen` with engine `id` to `depth`, or until told otherwise
+    /// without one, replacing that engine's current search.
+    #[allow(clippy::too_many_arguments)]
     pub async fn analyze<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        engines: &Engines,
+        id: &str,
         fen: String,
         multipv: u32,
         depth: Option<u32>,
@@ -352,157 +470,252 @@ impl Engine {
         let root = AnalysisRoot::from_fen(&fen).map_err(|e| e.to_string())?;
         let go = depth.map_or(Go::Infinite, |d| Go::Depth(d.clamp(1, MAX_DEPTH)));
         let request = Request::analysis(fen, root, multipv.clamp(1, MAX_MULTIPV), go, channel);
-        self.submit(app, request).await
+        let target = Target::from_registry(app, engines, id)?;
+        self.submit(app, &target, request).await
     }
 
-    /// Picks a move for the position after `moves` from `fen`, at `strength`
-    /// and under `clock` (or briefly without one). The move arrives in the
-    /// `done` event; the search can be stopped like any other.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn play<R: Runtime>(
+    /// Stops the current search of engine `id`. Does not start the engine.
+    pub async fn stop(&self, id: &str) {
+        if let Some(session) = self.sessions.lock().await.get(id) {
+            let _ = session.commands.send(Command::Stop);
+        }
+    }
+
+    /// Quits engine `id`, so that it starts afresh with its current setup when
+    /// next used.
+    pub async fn restart(&self, id: &str) {
+        let session = self.sessions.lock().await.remove(id);
+        if let Some(session) = session {
+            quit(session).await;
+        }
+    }
+
+    /// Asks every engine to quit and waits briefly for them.
+    pub async fn shutdown(&self) {
+        let sessions: Vec<Session> = self.sessions.lock().await.drain().map(|(_, s)| s).collect();
+        for session in sessions {
+            quit(session).await;
+        }
+    }
+
+    async fn session_info<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        fen: String,
-        moves: Vec<String>,
-        strength: Strength,
-        clock: Option<Clock>,
-        new_game: bool,
-        channel: Channel<EngineEvent>,
-    ) -> Result<(), String> {
-        let root = AnalysisRoot::from_fen_and_moves(&fen, &moves).map_err(|e| e.to_string())?;
-        let info = self.info(app).await?;
-        let request = Request {
-            fen,
-            root,
-            multipv: 1,
-            go: clock.map_or(Go::MoveTime(UNTIMED_MOVE_TIME), Go::Clock),
-            strength: strength.clamped(&info),
-            new_game,
-            channel,
-        };
-        self.submit(app, request).await
+        target: &Target<'_>,
+    ) -> Result<EngineInfo, String> {
+        let mut sessions = self.sessions.lock().await;
+        Ok(ensure_session(&mut sessions, app, target, self.config)
+            .await?
+            .info
+            .clone())
     }
 
-    /// Hands a request to the session, starting the engine if needed.
-    async fn submit<R: Runtime>(&self, app: &AppHandle<R>, request: Request) -> Result<(), String> {
+    /// Hands a request to a session, starting the engine if needed.
+    async fn submit<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        target: &Target<'_>,
+        request: Request,
+    ) -> Result<(), String> {
         let mut command = Command::Analyze(Box::new(request));
-        let mut session = self.session.lock().await;
+        let mut sessions = self.sessions.lock().await;
         // A second attempt covers an engine that died since the last request.
         for _ in 0..2 {
-            match ensure_session(&mut session, app, self.config)
+            match ensure_session(&mut sessions, app, target, self.config)
                 .await?
                 .commands
                 .send(command)
             {
                 Ok(()) => return Ok(()),
                 Err(mpsc::error::SendError(returned)) => {
-                    *session = None;
+                    sessions.remove(target.id);
                     command = returned;
                 }
             }
         }
         Err("the engine stopped unexpectedly".into())
     }
+}
 
-    /// Stops the current search. Does not start the engine.
-    pub async fn stop(&self) {
-        if let Some(session) = self.session.lock().await.as_ref() {
-            let _ = session.commands.send(Command::Stop);
-        }
-    }
-
-    /// Asks the engine to quit and waits briefly for it.
-    pub async fn shutdown(&self) {
-        let Some(session) = self.session.lock().await.take() else {
-            return;
-        };
-        let (done, exited) = oneshot::channel();
-        if session.commands.send(Command::Quit(done)).is_ok() {
-            let _ = timeout(QUIT_TIMEOUT * 2, exited).await;
-        }
+async fn quit(session: Session) {
+    let (done, exited) = oneshot::channel();
+    if session.commands.send(Command::Quit(done)).is_ok() {
+        let _ = timeout(QUIT_TIMEOUT * 2, exited).await;
     }
 }
 
-/// Returns the running session, spawning the engine if there is none or the
-/// last one died.
+/// Returns the running session of `target`, spawning the engine if there is
+/// none, the last one died or its setup changed since it started.
 async fn ensure_session<'a, R: Runtime>(
-    slot: &'a mut Option<Session>,
+    sessions: &'a mut HashMap<String, Session>,
     app: &AppHandle<R>,
+    target: &Target<'_>,
     config: Config,
 ) -> Result<&'a Session, String> {
-    if slot.as_ref().is_some_and(|s| s.commands.is_closed()) {
-        *slot = None;
+    let stale = sessions
+        .get(target.id)
+        .is_some_and(|s| s.commands.is_closed() || s.spec != target.spec);
+    if stale && let Some(old) = sessions.remove(target.id) {
+        quit(old).await;
     }
-    if slot.is_none() {
-        *slot = Some(spawn_session(app, config).await?);
+    if !sessions.contains_key(target.id) {
+        let (session, handshake) = spawn_session(app, target.spec.clone(), config).await?;
+        if let Some(engines) = target.engines {
+            engines.discovered(app, target.id, &handshake);
+        }
+        sessions.insert(target.id.to_owned(), session);
     }
-    Ok(slot.as_ref().expect("session was just set"))
+    Ok(sessions.get(target.id).expect("session was just set"))
 }
 
-async fn spawn_session<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<Session, String> {
-    let (mut events, mut child) = app
-        .shell()
-        .sidecar(SIDECAR)
-        .map_err(|e| format!("could not locate the engine: {e}"))?
+fn command<R: Runtime>(app: &AppHandle<R>, program: &Program) -> Result<ShellCommand, String> {
+    match program {
+        Program::Bundled => app
+            .shell()
+            .sidecar(SIDECAR)
+            .map_err(|e| format!("could not locate the engine: {e}")),
+        Program::Path(path) => {
+            if !path.is_file() {
+                return Err(format!("{} no longer exists", path.display()));
+            }
+            let mut command = app.shell().command(path);
+            // Engines look for their networks and books next to themselves.
+            if let Some(dir) = path.parent() {
+                command = command.current_dir(dir);
+            }
+            Ok(command)
+        }
+    }
+}
+
+/// Reads the engine's `uci` answer: its name, author and options.
+async fn handshake(
+    events: &mut Receiver<CommandEvent>,
+    child: &mut CommandChild,
+) -> Result<Handshake, String> {
+    send(child, "uci")?;
+    let mut name = None;
+    let mut author = None;
+    let mut options = Vec::new();
+    loop {
+        let line = next_line(events).await?;
+        if let Some(value) = uci::parse_id_name(&line) {
+            name = Some(value.to_owned());
+        } else if let Some(value) = uci::parse_id_author(&line) {
+            author = Some(value.to_owned());
+        } else if let Some(option) = uci::parse_option(&line) {
+            options.push(option);
+        } else if line == "uciok" {
+            break;
+        }
+    }
+    Ok(Handshake {
+        name: name.ok_or("the engine sent `uciok` without `id name`")?,
+        author,
+        options,
+    })
+}
+
+/// Starts a program, checks that it is a UCI engine and quits it again.
+pub async fn probe<R: Runtime>(app: &AppHandle<R>, program: &Program) -> Result<Handshake, String> {
+    let (mut events, mut child) = command(app, program)?
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("could not start the engine: {e}"))?;
+    let handshake = timeout(HANDSHAKE_TIMEOUT, handshake(&mut events, &mut child))
+        .await
+        .map_err(|_| {
+            "this doesn't look like a UCI engine: it never answered `uci`".to_string()
+        })??;
+    let _ = send(&mut child, "quit");
+    Ok(handshake)
+}
+
+/// The value to set for each option at startup: the user's choice, or for
+/// `Threads`, `Hash` and `Move Overhead` what `config` asks for.
+fn startup_values(
+    options: &[UciOption],
+    chosen: &BTreeMap<String, String>,
+    config: Config,
+) -> Vec<(UciOption, String)> {
+    let threads = if config.all_cores {
+        // Leave a core for the UI.
+        std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
+    } else {
+        1
+    };
+    options
+        .iter()
+        .filter(|option| !MANAGED_OPTIONS.contains(&option.name.as_str()))
+        .filter_map(|option| {
+            let value = match (chosen.get(&option.name), option.name.as_str()) {
+                (Some(value), _) => option.normalize(value).ok()?,
+                (None, "Threads") => option.normalize(&threads.to_string()).ok()?,
+                (None, "Hash") => option.normalize(&config.hash_mb.to_string()).ok()?,
+                (None, "Move Overhead") => option
+                    .normalize(&config.move_overhead_ms?.to_string())
+                    .ok()?,
+                (None, _) => return None,
+            };
+            Some((option.clone(), value))
+        })
+        .collect()
+}
+
+/// The value a spin option ends up with: set at startup, or the engine's default.
+fn effective_value(handshake: &Handshake, set: &[(UciOption, String)], name: &str) -> Option<u32> {
+    let option = handshake.options.iter().find(|o| o.name == name)?;
+    if !matches!(option.kind, OptionKind::Spin { .. }) {
+        return None;
+    }
+    set.iter()
+        .find(|(o, _)| o.name == name)
+        .map(|(_, value)| value.clone())
+        .or_else(|| option.default_value())?
+        .parse()
+        .ok()
+}
+
+async fn spawn_session<R: Runtime>(
+    app: &AppHandle<R>,
+    spec: LaunchSpec,
+    config: Config,
+) -> Result<(Session, Handshake), String> {
+    let (mut events, mut child) = command(app, &spec.program)?
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("could not start the engine: {e}"))?;
 
-    let threads = if config.all_cores {
-        // Leave a core for the UI.
-        std::thread::available_parallelism()
-            .map_or(1, |n| n.get().saturating_sub(1).max(1))
-            .try_into()
-            .unwrap_or(1)
-    } else {
-        1
-    };
-    let hash_mb = config.hash_mb;
-
-    let info = timeout(HANDSHAKE_TIMEOUT, async {
-        send(&mut child, "uci")?;
-        let (mut name, mut elo, mut skill) = (None, None, None);
-        loop {
-            let line = next_line(&mut events).await?;
-            if let Some(value) = uci::parse_id_name(&line) {
-                name = Some(value.to_owned());
-            } else if let Some((option, range)) = uci::parse_spin_option(&line) {
-                match option {
-                    ELO_OPTION => elo = Some(range.into()),
-                    SKILL_OPTION => skill = Some(range.into()),
-                    _ => {}
-                }
-            } else if line == "uciok" {
-                break;
-            }
-        }
-        send(
-            &mut child,
-            &format!("setoption name Threads value {threads}"),
-        )?;
-        send(&mut child, &format!("setoption name Hash value {hash_mb}"))?;
-        if let Some(overhead) = config.move_overhead_ms {
-            send(
-                &mut child,
-                &format!("setoption name Move Overhead value {overhead}"),
-            )?;
+    let (handshake, set) = timeout(HANDSHAKE_TIMEOUT, async {
+        let handshake = handshake(&mut events, &mut child).await?;
+        let set = startup_values(&handshake.options, &spec.values, config);
+        for (option, value) in &set {
+            send(&mut child, &option.set_command(value))?;
         }
         send(&mut child, "isready")?;
         while next_line(&mut events).await? != "readyok" {}
-        Ok::<_, String>(EngineInfo {
-            name: name.ok_or_else(|| "the engine sent `uciok` without `id name`".to_string())?,
-            threads,
-            hash_mb,
-            elo,
-            skill,
-        })
+        Ok::<_, String>((handshake, set))
     })
     .await
     .map_err(|_| "the engine did not get ready in time".to_string())??;
 
+    let info = EngineInfo {
+        name: handshake.name.clone(),
+        threads: effective_value(&handshake, &set, "Threads"),
+        hash_mb: effective_value(&handshake, &set, "Hash"),
+        elo: StrengthRange::of(&handshake.options, ELO_OPTION),
+        skill: StrengthRange::of(&handshake.options, SKILL_OPTION),
+    };
     let (commands, receiver) = mpsc::unbounded_channel();
     async_runtime::spawn(Actor::new(child, events).run(receiver));
-    Ok(Session { commands, info })
+    Ok((
+        Session {
+            commands,
+            info,
+            spec,
+        },
+        handshake,
+    ))
 }
 
 fn send(child: &mut CommandChild, command: &str) -> Result<(), String> {
@@ -680,7 +893,13 @@ impl<I: EngineInput> Actor<I> {
         let outcome: Result<Option<oneshot::Sender<()>>, String> = loop {
             let step = tokio::select! {
                 command = commands.recv() => match command {
-                    Some(Command::Quit(done)) => break Ok(Some(done)),
+                    Some(Command::Quit(done)) => {
+                        // Whoever waits for the running search hears that it is over.
+                        if let State::Searching(search) = &self.state {
+                            search.request.send_done(false, None);
+                        }
+                        break Ok(Some(done));
+                    }
                     // The app dropped its state: shut down quietly.
                     None => break Ok(None),
                     Some(command) => self.handle(command),
@@ -1186,13 +1405,15 @@ mod tests {
             );
 
             // Options are only sent when they change.
-            let _events = h.play(&["e2e4", "c7c5", "g1f3"], Strength::Elo(1500), None, false);
+            let mut events = h.play(&["e2e4", "c7c5", "g1f3"], Strength::Elo(1500), None, false);
             h.expect_written(&[
                 &format!("position fen {START} moves e2e4 c7c5 g1f3"),
                 "go movetime 1000",
             ])
             .await;
             h.say("bestmove d7d6").await;
+            // Wait for the move, or the analysis below could arrive first and stop the search.
+            next_event(&mut events, |e| e["type"] == "done").await;
 
             // Analysis afterwards gets the engine back at full strength.
             let _events = h.analyze(START, 1);
@@ -1210,8 +1431,8 @@ mod tests {
     fn clamps_strengths_to_what_the_engine_supports() {
         let info = EngineInfo {
             name: "Stockfish".into(),
-            threads: 1,
-            hash_mb: 16,
+            threads: Some(1),
+            hash_mb: Some(16),
             elo: Some(StrengthRange {
                 min: 1320,
                 max: 3190,

@@ -42,6 +42,12 @@ pub fn opening_for<S: AsRef<str>>(fens: &[S]) -> Option<&'static Opening> {
     })
 }
 
+/// The name of the last of `positions` that has one, like [`opening_for`].
+pub fn opening_for_positions(positions: &[Chess]) -> Option<&'static Opening> {
+    let index = index();
+    positions.iter().rev().find_map(|pos| index.get(&key(pos)))
+}
+
 fn key(pos: &Chess) -> String {
     Epd::from_position(pos, EnPassantMode::Legal).to_string()
 }
