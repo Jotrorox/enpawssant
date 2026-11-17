@@ -3,7 +3,7 @@
 // Positions and expected counts are from https://www.chessprogramming.org/Perft_Results.
 
 import { describe, expect, test } from "vitest";
-import { parseFen, perft } from "./rules";
+import { parseFen, perft, premoveDests } from "./rules";
 
 const CASES: { name: string; fen: string; counts: number[] }[] = [
   {
@@ -53,4 +53,33 @@ describe("perft", () => {
       },
     );
   }
+});
+
+describe("premoveDests", () => {
+  const dests = (fen: string, square: string) =>
+    [...(premoveDests(parseFen(fen), fen.includes(" w ") ? "b" : "w").get(square) ?? [])].sort();
+
+  test("pawns push and may always capture", () => {
+    // White premoves while Black is to move.
+    const fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1";
+    expect(dests(fen, "e2")).toEqual(["d3", "e3", "e4", "f3"]);
+    expect(dests(fen, "a2")).toEqual(["a3", "a4", "b3"]);
+  });
+
+  test("own pieces block, the opponent's don't", () => {
+    const fen = "4k3/8/8/8/4p3/8/8/R3K2R b KQ - 0 1";
+    // The rook goes up the a-file and along the first rank up to its own king.
+    expect(dests(fen, "a1")).toEqual(
+      ["a2", "a3", "a4", "a5", "a6", "a7", "a8", "b1", "c1", "d1"].sort(),
+    );
+    // The king may castle both ways while it has the rights.
+    expect(dests(fen, "e1")).toEqual(["c1", "d1", "d2", "e2", "f1", "f2", "g1"]);
+  });
+
+  test("sliders see through opposing pieces", () => {
+    const fen = "4k3/8/8/8/8/8/8/Q3K3 b - - 0 1";
+    const queen = premoveDests(parseFen("4k3/4p3/8/8/8/8/8/4Q1K1 b - - 0 1"), "w").get("e1");
+    expect(queen).toContain("e8");
+    expect(dests(fen, "e1")).not.toContain("g1");
+  });
 });

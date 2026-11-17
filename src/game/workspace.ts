@@ -12,6 +12,8 @@ export type SavedTab = {
   game: PgnGame;
   /** The current position as an `indexPath` into the game's move tree. */
   position: number[];
+  /** The Lichess game played in the tab, so it can reconnect. */
+  lichessId?: string;
 };
 
 export type SavedWorkspace = {
@@ -63,6 +65,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function isSavedTab(value: unknown): value is SavedTab {
   if (!isRecord(value) || typeof value.title !== "string") return false;
   if (!Array.isArray(value.position) || !value.position.every(Number.isInteger)) return false;
+  if (value.lichessId !== undefined && typeof value.lichessId !== "string") return false;
   const game = value.game;
   return (
     isRecord(game) &&

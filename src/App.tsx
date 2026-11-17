@@ -5,6 +5,7 @@ import {
   createResource,
   createSignal,
   Match,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -24,11 +25,13 @@ import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine"
 import { enginesConfig, loadEngines } from "./chess/engines";
 import { fetchOpeningName } from "./chess/explorer";
 import { readPgnFile, rememberFile } from "./chess/files";
+import { lichessUsername } from "./chess/lichess";
+import { challengeDirection, timeControlName, toColor } from "./chess/lichessPlay";
 import { colorOf } from "./chess/online";
-import type { ImportedGame, ParsedPgn, PgnGame } from "./chess/pgn";
+import { header, type ImportedGame, type ParsedPgn, type PgnGame } from "./chess/pgn";
 import { mainline, reviewCoverage, reviewedScore, reviewNag } from "./chess/review";
 import { makeMove, parseUciMove } from "./chess/rules";
-import { AnalysisPanel } from "./components/AnalysisPanel";
+import { AnalysisPanel, type LiveGame } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { type DatabaseRequest, DatabaseView } from "./components/DatabaseView";
 import { EnginesView } from "./components/EnginesView";
@@ -37,10 +40,13 @@ import { PawIcon } from "./components/Icons";
 import type { BestMoveHint } from "./components/Notation";
 import { ExportDialog, ImportDialog, type ImportSource } from "./components/PgnDialogs";
 import { type NewGame, PlayDialog } from "./components/PlayDialog";
+import { PlayView } from "./components/PlayView";
 import { PuzzlesView } from "./components/PuzzlesView";
 import { type Section, SideRail } from "./components/SideRail";
 import { TitleBar, type WorkspaceTab } from "./components/TitleBar";
 import { EmptyState, type Toast, Toasts } from "./components/ui";
+import { lichessEvents } from "./game/lichessEvents";
+import { createOnlineGame, type OnlineGame } from "./game/online";
 import { createEngineGame, type EngineGame, engineGameHeaders } from "./game/play";
 import { createGameSession, type GameInfo, type GameSession, gameTitle } from "./game/session";
 import { loadWorkspace, saveWorkspace } from "./game/workspace";
@@ -57,10 +63,18 @@ const TOAST_MS = 5000;
 const REVIEW_DEPTH = 16;
 
 /**
- * A workspace tab, the game open in it and the game being played against the engine there.
- * `orientation` is the side the board starts facing.
+ * A workspace tab, the game open in it and the game being played there, if any. `orientation` is
+ * the side the board starts facing.
  */
-type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame; orientation?: Color };
+type Tab = WorkspaceTab & {
+  session: GameSession;
+  game?: EngineGame | OnlineGame;
+  orientation?: Color;
+  /** The Lichess game played in the tab. */
+  lichessId?: string;
+  /** Set for a finished game opened to analyse, until its full-game analysis has started. */
+  reviewOnOpen?: boolean;
+};
 
 export default function App() {
   let opened = 0;
@@ -94,13 +108,49 @@ export default function App() {
       },
     };
   };
+  /**
+   * A tab for a game on Lichess, from `game` (the moves known so far, e.g. from last time). Its
+   * title follows the players once the game has loaded.
+   */
+  const createOnlineTab = (
+    id: string,
+    options: { color?: Color; game?: PgnGame; position?: number[] } = {},
+  ): Tab => {
+    const tab = createTab(
+      options.game ?? { headers: [], startFen: START_FEN, moves: [] },
+      "Lichess game",
+      options.position,
+    );
+    const game = createOnlineGame(tab.session, id, {
+      username: lichessUsername,
+      color: options.color,
+    });
+    return {
+      ...tab,
+      game,
+      lichessId: id,
+      get title() {
+        return game.full() ? gameTitle({ headers: tab.session.headers() }) : "Lichess game";
+      },
+      get live() {
+        return game.playing();
+      },
+    };
+  };
   const createBoard = () => createTab({ headers: [], startFen: START_FEN, moves: [] }, "New board");
 
-  // Reopen the tabs from last time, or start on an empty board.
+  // Reopen the tabs from last time, or start on an empty board. Lichess games that were still on
+  // reconnect; the others reopen as ordinary games.
   const saved = loadWorkspace();
   const restored = (saved?.tabs ?? []).flatMap((tab) => {
     try {
-      return [createTab(tab.game, tab.title, tab.position)];
+      // Only games still on when the app closed were saved with their Lichess ID.
+      const unfinished = header(tab.game, "Result") === "*";
+      return [
+        tab.lichessId && unfinished
+          ? createOnlineTab(tab.lichessId, { game: tab.game, position: tab.position })
+          : createTab(tab.game, tab.title, tab.position),
+      ];
     } catch {
       // A game that no longer loads is dropped rather than blocking startup.
       return [];
@@ -112,6 +162,17 @@ export default function App() {
   const [tabs, setTabs] = createSignal<Tab[]>(initialTabs);
   const [activeId, setActiveId] = createSignal<string | undefined>(initialActive.id);
   const activeTab = () => tabs().find((tab) => tab.id === activeId());
+  /**
+   * The tab with a game in progress, if any. While there is one the app is in fair-play mode: the
+   * engine, the opening explorer and every way of getting the position out (Copy FEN, Export PGN,
+   * the database's board position) are off in every tab, not just the game's.
+   */
+  // An open correspondence game only keeps its own tab fair: it can last weeks, and the engine
+  // in it stays off until it's over.
+  const liveTab = createMemo(() =>
+    tabs().find((tab) => tab.live && !(tab.game?.kind === "online" && tab.game.correspondence())),
+  );
+  const fairPlay = () => liveTab() !== undefined;
   const [importing, setImporting] = createSignal(false);
   const [importSource, setImportSource] = createSignal<ImportSource>("pgn");
   /** Games read from dropped files, shown in the import dialog's game picker. */
@@ -141,6 +202,8 @@ export default function App() {
         title: tab.title,
         game: tab.session.toPgn(),
         position: tab.session.position(),
+        // Only games still on reconnect next time.
+        lichessId: tab.game?.playing() ? tab.lichessId : undefined,
       })),
       active: Math.max(
         0,
@@ -152,6 +215,7 @@ export default function App() {
   const closeTab = (id: string) => {
     const index = tabs().findIndex((tab) => tab.id === id);
     const closing = tabs()[index];
+    if (closing?.lichessId) closedGames.add(closing.lichessId);
     const remaining = tabs().filter((tab) => tab.id !== id);
     if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
@@ -185,6 +249,60 @@ export default function App() {
     setActiveId(id);
     setSection("board");
   };
+
+  /**
+   * Opens a finished game in a new, ordinary tab, from the start, and analyses the whole game
+   * there. The game's own tab keeps the clocks and result.
+   */
+  const analyseGame = (tab: Tab) => {
+    const created = createTab(tab.session.toPgn(), tab.title, undefined, tab.game?.color());
+    openTabs([{ ...created, reviewOnOpen: true }]);
+  };
+
+  /** Switches to the tab of Lichess game `id`, opening one if needed. */
+  const openOnlineGame = ({ id, color }: { id: string; color?: Color }) => {
+    closedGames.delete(id);
+    const open = tabs().find((tab) => tab.lichessId === id);
+    if (open) selectTab(open.id);
+    else openTabs([createOnlineTab(id, { color })]);
+  };
+
+  // Games the user is waiting for (accepted or sent challenges) open in a tab when they start, as
+  // do real-time games, which can't wait: including those still on after a restart, since Lichess
+  // reports every ongoing game when the event stream connects. Correspondence games otherwise
+  // stay in the Play section's list.
+  const expectedGames = new Set<string>();
+  /** Games whose tab the user closed; Lichess reports them again whenever it reconnects. */
+  const closedGames = new Set<string>();
+  onMount(() => {
+    const stopGames = lichessEvents.onGameStart((game) => {
+      const expected = expectedGames.delete(game.gameId);
+      if (tabs().some((tab) => tab.lichessId === game.gameId)) return;
+      // Games played elsewhere at speeds the Board API can't play (bullet) aren't for us.
+      if (game.compat?.board === false) return;
+      const realtime = game.speed !== "correspondence" && !closedGames.has(game.gameId);
+      if (expected || realtime) {
+        openOnlineGame({ id: game.gameId, color: toColor(game.color) });
+      }
+    });
+    const stopChallenges = lichessEvents.onChallenge((challenge) => {
+      const username = lichessUsername();
+      if (!username || challengeDirection(challenge, username) !== "in") return;
+      notify(
+        `${challenge.challenger.name} challenges you to a ${timeControlName(challenge.timeControl)} game. Answer in the Play section.`,
+      );
+    });
+    onCleanup(() => {
+      stopGames();
+      stopChallenges();
+    });
+  });
+  const playBadge = () =>
+    lichessEvents.challenges().filter((challenge) => {
+      const username = lichessUsername();
+      return username && challengeDirection(challenge, username) === "in";
+    }).length +
+    lichessEvents.games().filter((game) => game.isMyTurn && game.speed === "correspondence").length;
 
   /** Opens games read from files: one game straight away, several in the game picker. */
   const openFiles = (parsed: ParsedPgn & { name?: string }) => {
@@ -304,9 +422,17 @@ export default function App() {
         }}
       />
       <div class="flex min-h-0 flex-1">
-        <SideRail active={section()} onSelect={setSection} />
+        <SideRail active={section()} onSelect={setSection} badges={{ play: playBadge() }} />
         <main class="min-w-0 flex-1">
           <Switch>
+            <Match when={section() === "play"}>
+              <PlayView
+                onPlayStockfish={() => setChoosingGame(true)}
+                onOpenGame={openOnlineGame}
+                onExpectGame={(id) => expectedGames.add(id)}
+                notify={notify}
+              />
+            </Match>
             <Match when={section() === "files"}>
               <FilesView
                 onOpenGames={openGames}
@@ -318,6 +444,7 @@ export default function App() {
               <DatabaseView
                 request={databaseRequest()}
                 currentFen={activeTab()?.session.node().fen}
+                fairPlay={fairPlay()}
                 canAddCurrent={!!activeTab()}
                 onAddCurrent={() => void saveToDatabase()}
                 onImportFiles={() => void runImport(importFiles)}
@@ -362,11 +489,26 @@ export default function App() {
                   <GameWorkspace
                     session={tab.session}
                     game={tab.game}
+                    fairPlay={fairPlay() || !!tab.live}
+                    liveGame={
+                      liveTab() && liveTab() !== tab
+                        ? {
+                            title: liveTab()?.title ?? "",
+                            onShow: () => selectTab(liveTab()?.id ?? ""),
+                          }
+                        : undefined
+                    }
                     orientation={tab.orientation}
                     onImport={() => showImport("pgn")}
                     onExport={() => setExporting(true)}
                     onSaveToDatabase={() => void saveToDatabase()}
                     onPlay={() => setChoosingGame(true)}
+                    onAnalyse={() => analyseGame(tab)}
+                    takeReviewOnOpen={() => {
+                      const pending = tab.reviewOnOpen === true;
+                      tab.reviewOnOpen = false;
+                      return pending;
+                    }}
                   />
                 )}
               </Show>
@@ -382,7 +524,7 @@ export default function App() {
         onOpen={openGames}
       />
       <ExportDialog
-        open={exporting()}
+        open={exporting() && !fairPlay()}
         session={activeTab()?.session}
         onClose={() => setExporting(false)}
       />
@@ -417,21 +559,34 @@ function count(n: number, noun: string): string {
 
 function GameWorkspace(props: {
   session: GameSession;
-  game?: EngineGame;
+  game?: EngineGame | OnlineGame;
+  /** A game is in progress, in this tab or another: no engine, explorer or position export. */
+  fairPlay: boolean;
+  /** The game in progress when it is in another tab. */
+  liveGame?: LiveGame;
   orientation?: Color;
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
   onPlay: () => void;
+  onAnalyse: () => void;
+  /** Whether the tab was opened to analyse a game, which is then analysed straight away. */
+  takeReviewOnOpen: () => boolean;
 }) {
   const session = props.session;
   const game = props.game;
   const [orientation, setOrientation] = createSignal<Color>(
-    game?.settings.color ?? props.orientation ?? "w",
+    game?.color() ?? props.orientation ?? "w",
   );
+  // A Lichess game only says which side the user plays once it has loaded. Turning the board to
+  // it happens once, so flipping it by hand sticks.
+  if (game?.kind === "online") {
+    const side = createMemo(() => (game.full() ? game.color() : undefined));
+    createEffect(on(side, (current) => current && setOrientation(current), { defer: true }));
+  }
   const fen = () => session.node().fen;
-  /** The engine keeps its opinions to itself while a game against it is on. */
-  const playing = () => game?.playing() ?? false;
+  /** The engine keeps its opinions to itself while any game is on. */
+  const fairPlay = () => props.fairPlay;
 
   /** Positions of the main line; a new array only when the main line itself changes. */
   const mainFens = createMemo(
@@ -453,13 +608,13 @@ function GameWorkspace(props: {
   const engine = createEngineAnalysis({
     engineId: primaryId,
     fen,
-    enabled: () => engineOn() && !playing(),
+    enabled: () => engineOn() && !fairPlay(),
     multipv: ENGINE_LINES,
   });
   const second = createEngineAnalysis({
     engineId: secondaryId,
     fen,
-    enabled: () => engineOn() && !playing(),
+    enabled: () => engineOn() && !fairPlay(),
     multipv: SECOND_ENGINE_LINES,
   });
   const analysis = () => engine.analysisOf(fen());
@@ -469,7 +624,9 @@ function GameWorkspace(props: {
     return positionScore(engine.analysisOf(node.fen)) ?? node.eval;
   };
   // Positions without either stay empty in the eval graph.
-  const evals = createMemo(() => session.line().map((id) => (playing() ? undefined : scoreOf(id))));
+  const evals = createMemo(() =>
+    session.line().map((id) => (fairPlay() ? undefined : scoreOf(id))),
+  );
 
   /**
    * Searches every main-line position to a fixed depth, storing and judging each result as it
@@ -510,7 +667,7 @@ function GameWorkspace(props: {
   const bestMoveHint = createMemo((): BestMoveHint | undefined => {
     const node = session.node();
     const nag = reviewNag(node.nags);
-    if (!nag || !node.move || node.parent === undefined || playing()) return undefined;
+    if (!nag || !node.move || node.parent === undefined || fairPlay()) return undefined;
     const parent = session.tree.nodes[node.parent];
     // A review stores the best move; otherwise the engine may have looked at the position since.
     const uci = parent.bestMove ?? engine.analysisOf(parent.fen)?.lines[0]?.uci[0];
@@ -533,7 +690,18 @@ function GameWorkspace(props: {
 
   const arrows = createMemo(() => {
     const current = analysis();
-    return engineOn() && !playing() && current ? lineArrows(current) : [];
+    return engineOn() && !fairPlay() && current ? lineArrows(current) : [];
+  });
+
+  // A full-game analysis stops when a game starts; it can be run again once the game is over.
+  createEffect(() => {
+    if (fairPlay() && engine.reviewProgress()) engine.cancelReview();
+  });
+
+  // "Analyse this game" opens a tab that analyses the whole game at once, unless another game is
+  // on; the button in the toolbar starts it later.
+  onMount(() => {
+    if (props.takeReviewOnOpen() && !fairPlay()) void reviewGame();
   });
 
   onMount(() => {
@@ -578,6 +746,14 @@ function GameWorkspace(props: {
         onFlip={() => setOrientation((side) => (side === "w" ? "b" : "w"))}
         onPly={session.goToIndex}
         onMove={game ? (game.canMove() ? game.move : undefined) : session.play}
+        premove={
+          game && {
+            color: game.color(),
+            enabled: game.canPremove(),
+            current: game.premove(),
+            onSet: game.setPremove,
+          }
+        }
         onImport={props.onImport}
         onExport={props.onExport}
         onSaveToDatabase={props.onSaveToDatabase}
@@ -586,7 +762,7 @@ function GameWorkspace(props: {
         reviewError={engine.reviewError()}
         reviewed={coverage()}
         judgements={judgements()}
-        reviewDisabled={playing()}
+        fairPlay={fairPlay()}
         onReview={() => void reviewGame()}
         onCancelReview={engine.cancelReview}
       />
@@ -598,12 +774,15 @@ function GameWorkspace(props: {
             ? { id: secondaryId() ?? "", analysis: second.analysisOf(fen()), error: second.error() }
             : undefined
         }
-        score={playing() ? undefined : scoreOf(session.currentId())}
+        score={fairPlay() ? undefined : scoreOf(session.currentId())}
         engineOn={engineOn()}
         onToggleEngine={() => setEngineOn((on) => !on)}
         bestMove={bestMoveHint()}
         game={game}
+        fairPlay={fairPlay()}
+        liveGame={props.liveGame}
         onNewGame={props.onPlay}
+        onAnalyse={props.onAnalyse}
       />
     </div>
   );

@@ -41,6 +41,13 @@ type BoardPanelProps = {
   onPly: (ply: number) => void;
   /** Without it the board takes no moves, e.g. while the engine is to move. */
   onMove?: (move: MoveInput) => void;
+  /** Premoves on the opponent's turn in a game being played. */
+  premove?: {
+    color: Color;
+    enabled: boolean;
+    current?: MoveInput;
+    onSet: (move?: MoveInput) => void;
+  };
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
@@ -52,11 +59,14 @@ type BoardPanelProps = {
   /** The review judgement (`?!`, `?`, `??`) of each move of the current line, by position. */
   judgements: (ReviewNag | undefined)[];
   reviewError?: string;
-  /** Full-game analysis waits while a game against the engine is on. */
-  reviewDisabled?: boolean;
+  /** A game is in progress somewhere: full-game analysis, Copy FEN and Export PGN are off. */
+  fairPlay?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 };
+
+/** Tooltip of the buttons fair-play mode turns off. */
+const FAIR_PLAY_OFF = "Off while a game is in progress";
 
 export function BoardPanel(props: BoardPanelProps) {
   return (
@@ -73,6 +83,7 @@ export function BoardPanel(props: BoardPanelProps) {
               lastMove={props.lastMove}
               arrows={props.arrows}
               onMove={props.onMove}
+              premove={props.premove}
               sound={soundEnabled()}
             />
           </div>
@@ -91,7 +102,7 @@ export function BoardPanel(props: BoardPanelProps) {
         onPlay={props.onPlay}
         review={props.review}
         reviewed={props.reviewed}
-        reviewDisabled={props.reviewDisabled}
+        fairPlay={props.fairPlay}
         onReview={props.onReview}
         onCancelReview={props.onCancelReview}
       />
@@ -182,7 +193,7 @@ function BoardToolbar(props: {
   onPlay: () => void;
   review?: ReviewProgress;
   reviewed: ReviewProgress;
-  reviewDisabled?: boolean;
+  fairPlay?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 }) {
@@ -191,7 +202,7 @@ function BoardToolbar(props: {
   const analyzed = () => !noMoves() && props.reviewed.done === props.reviewed.total;
   const resumable = () => props.reviewed.done > 0 && !analyzed();
   const reviewTitle = () => {
-    if (props.reviewDisabled) return "Available once the game is over";
+    if (props.fairPlay) return FAIR_PLAY_OFF;
     if (noMoves()) return "Play or import some moves first";
     if (analyzed()) return "Every position of the main line is analyzed";
     if (resumable())
@@ -201,6 +212,7 @@ function BoardToolbar(props: {
   let resetTimer: number | undefined;
 
   const copyFen = async () => {
+    if (props.fairPlay) return;
     try {
       await navigator.clipboard.writeText(props.fen);
       setCopied(true);
@@ -219,7 +231,17 @@ function BoardToolbar(props: {
       <IconButton label="Edit position">
         <PencilIcon />
       </IconButton>
-      <IconButton label={copied() ? "FEN copied" : "Copy FEN"} onClick={copyFen}>
+      <IconButton
+        label={
+          props.fairPlay
+            ? `Copy FEN: ${FAIR_PLAY_OFF.toLowerCase()}`
+            : copied()
+              ? "FEN copied"
+              : "Copy FEN"
+        }
+        disabled={props.fairPlay}
+        onClick={copyFen}
+      >
         <Show when={copied()} fallback={<CopyIcon />}>
           <CheckIcon class="size-5 text-nag-good" />
         </Show>
@@ -227,7 +249,11 @@ function BoardToolbar(props: {
       <IconButton label="Import games" onClick={() => props.onImport()}>
         <ImportIcon />
       </IconButton>
-      <IconButton label="Export PGN" onClick={() => props.onExport()}>
+      <IconButton
+        label={props.fairPlay ? `Export PGN: ${FAIR_PLAY_OFF.toLowerCase()}` : "Export PGN"}
+        disabled={props.fairPlay}
+        onClick={() => props.onExport()}
+      >
         <ExportIcon />
       </IconButton>
       <IconButton label="Save to the game database" onClick={() => props.onSaveToDatabase()}>
@@ -286,7 +312,7 @@ function BoardToolbar(props: {
           <button
             type="button"
             onClick={() => props.onReview()}
-            disabled={props.reviewDisabled || noMoves() || analyzed()}
+            disabled={props.fairPlay || noMoves() || analyzed()}
             title={reviewTitle()}
             class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400"
           >

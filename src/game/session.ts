@@ -2,7 +2,7 @@
 // outlive the tab's view, so switching tabs keeps moves, variations and the current position.
 
 import { batch, createMemo, createRoot, createSignal } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { type Nag, toggleQualityNag } from "../chess/nag";
 import { header, type PgnGame } from "../chess/pgn";
 import {
@@ -153,6 +153,16 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       setTree(produce((draft) => recordReview(draft, id, result, depth)));
     };
 
+    /** Replaces the whole game, e.g. when a game from Lichess turns out to start elsewhere. */
+    const reset = (game: PgnGame) => {
+      batch(() => {
+        setTree(reconcile(treeFromPgn(game)));
+        setHeaders(game.headers);
+        setCurrentId(tree.rootId);
+        setLineEndId(lineEnd(tree, tree.rootId));
+      });
+    };
+
     const promote = (id: NodeId) => {
       if (!tree.nodes[id]) return;
       setTree(produce((draft) => makeMainline(draft, id)));
@@ -180,6 +190,7 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       review,
       remove,
       promote,
+      reset,
       toPgn: () => treeToPgn(tree, headers()),
       /** The current node as an `indexPath`, for restoring it later. */
       position: () => indexPath(tree, currentId()),

@@ -4,7 +4,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createRoot, createSignal } from "solid-js";
 
-export type LichessAccount = { username: string };
+/** `canPlay` is false for tokens from before playing was supported, which may only read. */
+export type LichessAccount = { username: string; canPlay: boolean };
 
 export type AccountState =
   | { status: "loading" }
@@ -55,6 +56,12 @@ export function cancelSignIn() {
 export async function signOut() {
   store.setState({ status: "signedOut" });
   await invoke("lichess_sign_out").catch(() => {});
+}
+
+/** The signed-in user's name, if they are signed in. */
+export function lichessUsername(): string | undefined {
+  const state = store.state();
+  return state.status === "signedIn" ? state.account.username : undefined;
 }
 
 /** Lichess no longer accepts the token, so the backend has already forgotten it. */

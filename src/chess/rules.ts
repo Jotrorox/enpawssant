@@ -323,6 +323,87 @@ export function legalDests(pos: Position): Map<Square, Square[]> {
   return dests;
 }
 
+/**
+ * Where `color`'s pieces could premove while the opponent is to move: every square their moves
+ * reach if the opponent's pieces might have moved away or onto it by then. Own pieces stay put, so
+ * they block; opposing pieces don't, and pawns may always premove a capture.
+ */
+export function premoveDests(pos: Position, color: Color): Map<Square, Square[]> {
+  const dests = new Map<Square, Square[]>();
+  const own = (index: number | undefined) =>
+    index !== undefined && pos.board[index]?.color === color;
+  pos.board.forEach((piece, from) => {
+    if (piece?.color !== color) return;
+    const targets = new Set<number>();
+    const add = (index: number | undefined) => {
+      if (index !== undefined && !own(index)) targets.add(index);
+    };
+    const slide = (dirs: number[][]) => {
+      for (const [df, dr] of dirs) {
+        for (let to = step(from, df, dr); to !== undefined && !own(to); to = step(to, df, dr)) {
+          targets.add(to);
+        }
+      }
+    };
+    switch (piece.type) {
+      case "n":
+        for (const [df, dr] of KNIGHT_STEPS) add(step(from, df, dr));
+        break;
+      case "b":
+        slide(BISHOP_DIRS);
+        break;
+      case "r":
+        slide(ROOK_DIRS);
+        break;
+      case "q":
+        slide(KING_STEPS);
+        break;
+      case "k": {
+        for (const [df, dr] of KING_STEPS) add(step(from, df, dr));
+        const home = color === "w" ? 4 : 60;
+        if (from === home) {
+          const rook = (index: number) =>
+            pos.board[index]?.type === "r" && pos.board[index]?.color === color;
+          const clear = (indices: number[]) => indices.every((index) => !own(index));
+          const short = color === "w" ? "K" : "k";
+          const long = color === "w" ? "Q" : "q";
+          if (pos.castling.includes(short) && rook(home + 3) && clear([home + 1, home + 2])) {
+            targets.add(home + 2);
+          }
+          if (
+            pos.castling.includes(long) &&
+            rook(home - 4) &&
+            clear([home - 1, home - 2, home - 3])
+          ) {
+            targets.add(home - 2);
+          }
+        }
+        break;
+      }
+      case "p": {
+        const forward = color === "w" ? 1 : -1;
+        const one = step(from, 0, forward);
+        if (one !== undefined && !own(one)) {
+          targets.add(one);
+          const startRank = color === "w" ? 1 : 6;
+          const two = step(from, 0, 2 * forward);
+          if (from >> 3 === startRank && two !== undefined && !own(two)) targets.add(two);
+        }
+        add(step(from, -1, forward));
+        add(step(from, 1, forward));
+        break;
+      }
+    }
+    if (targets.size > 0) {
+      dests.set(
+        squareName(from),
+        [...targets].map((index) => squareName(index)),
+      );
+    }
+  });
+  return dests;
+}
+
 export function isPromotion(pos: Position, from: Square, to: Square): boolean {
   const piece = pos.board[squareIndex(from)];
   return piece?.type === "p" && (to[1] === "8" || to[1] === "1");

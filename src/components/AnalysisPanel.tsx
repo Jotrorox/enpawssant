@@ -25,6 +25,7 @@ import {
 import { cancelSignIn, lichessAccount, markSignedOut, signIn, signOut } from "../chess/lichess";
 import { parseUciMove } from "../chess/rules";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
+import type { OnlineGame } from "../game/online";
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
@@ -32,6 +33,9 @@ import { NamesForm } from "./MyNames";
 import { type BestMoveHint, Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
+
+/** A game in progress in another tab, which fair-play mode points back to. */
+export type LiveGame = { title: string; onShow: () => void };
 
 /** What one engine found for the current position. */
 export type EngineView = {
@@ -52,9 +56,14 @@ type AnalysisPanelProps = {
   bestMove?: BestMoveHint;
   engineOn: boolean;
   onToggleEngine: () => void;
-  /** The game against the engine in this tab, if there is one. */
-  game?: EngineGame;
+  /** The game being played in this tab, if there is one. */
+  game?: EngineGame | OnlineGame;
+  /** A game is in progress, here or in another tab: the engine and the explorer are off. */
+  fairPlay: boolean;
+  /** The game in progress when it is in another tab. */
+  liveGame?: LiveGame;
   onNewGame: () => void;
+  onAnalyse: () => void;
 };
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
@@ -69,10 +78,18 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
   return (
     <div class="flex min-h-0 min-w-0 flex-col gap-3 pt-3.5 pr-3.5 pb-3.5">
       <Show when={props.game}>
-        {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
+        {(game) => (
+          <PlayCard
+            session={props.session}
+            game={game()}
+            onNewGame={props.onNewGame}
+            onAnalyse={props.onAnalyse}
+          />
+        )}
       </Show>
-      {/* No help from the engine or the explorer while the game is on. */}
-      <Show when={!props.game?.playing()}>
+      {/* No help from the engine or the explorer while a game is on, in any tab. */}
+      <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>
+      <Show when={!props.fairPlay}>
         <EngineCard
           engine={engine}
           engineId={props.primary.id}
@@ -87,6 +104,31 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
       </Show>
       <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
     </div>
+  );
+}
+
+/** Stands in for the engine and the explorer while a game is on in another tab. */
+function FairPlayCard(props: { game: LiveGame }) {
+  return (
+    <Card class="flex shrink-0 items-start gap-3 px-[18px] py-3.5">
+      <span class="grid size-8 shrink-0 place-items-center rounded-full bg-lavender text-ink">
+        <CatIcon class="size-[18px]" />
+      </span>
+      <div class="min-w-0 flex-1">
+        <CardTitle>Fair play</CardTitle>
+        <p class="mt-1 text-[13px] leading-snug text-muted">
+          A game is on in <span class="font-bold text-ink">{props.game.title}</span>, so the engine,
+          the opening explorer, Copy FEN and Export PGN are napping in every tab until it's over.
+        </p>
+      </div>
+      <button
+        type="button"
+        class={`${SECONDARY_BUTTON} shrink-0`}
+        onClick={() => props.game.onShow()}
+      >
+        Go to the game
+      </button>
+    </Card>
   );
 }
 
@@ -515,7 +557,7 @@ function SignInPrompt(props: { error?: string }) {
     <EmptyState class="gap-3">
       <span>
         Lichess only shares its opening explorer with signed-in players. A free account is enough,
-        and EnPawssant can only read the explorer, never play or post as you.
+        and signing in also lets you play on lichess.org from the Play section.
       </span>
       <Show when={props.error}>
         {(error) => <span class="text-error">Mochi couldn't sign you in: {error()}.</span>}
