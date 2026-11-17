@@ -2,7 +2,8 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { createRoot, createSignal } from "solid-js";
-import type { ExplorerResult } from "./explorer";
+import type { Color } from "./board";
+import type { ExplorerResult, ResultCounts } from "./explorer";
 import type { PgnGame } from "./pgn";
 
 export type GameSummary = {
@@ -32,6 +33,8 @@ export type SearchQuery = {
   result?: string;
   /** Games that reached this position in their main line. */
   fen?: string;
+  /** Only games played under one of the user's names. */
+  mine?: boolean;
   offset: number;
   limit: number;
 };
@@ -73,7 +76,78 @@ export const clearDatabase = () => invoke<void>("db_clear");
 
 export const addGame = (game: PgnGame) => invoke<AddedGame>("db_add_game", { game });
 
-export const exploreDatabase = (fen: string) => invoke<ExplorerResult>("db_explorer", { fen });
+/** Move statistics from the database: from every game, or only those where the user had `side`. */
+export const exploreDatabase = (fen: string, side?: Color) =>
+  invoke<ExplorerResult>("db_explorer", {
+    fen,
+    side: side === undefined ? null : side === "w" ? "white" : "black",
+  });
+
+/** The ID of the game with this fingerprint, if it is still in the database. */
+export const findGame = (fingerprint: string) =>
+  invoke<number | null>("db_find_game", { fingerprint });
+
+export type MyNames = {
+  names: string[];
+  /** The players with the most games, to pick from. */
+  suggestions: string[];
+};
+
+/** The names the user plays under, shared by every view and loaded once. */
+const names = createRoot(() => {
+  const [state, setState] = createSignal<MyNames>();
+  const load = () =>
+    invoke<MyNames>("db_my_names")
+      .then(setState)
+      .catch(() => setState((known) => known ?? { names: [], suggestions: [] }));
+  void load();
+  return { state, setState, load };
+});
+
+/** The user's names and suggestions; `undefined` until loaded. */
+export const myNames = names.state;
+
+/** Loads the names again, e.g. for fresh suggestions after an import. */
+export const reloadMyNames = () => names.load();
+
+/** Saves the user's names and resolves with them cleaned up. */
+export async function saveMyNames(list: string[]): Promise<string[]> {
+  const saved = await invoke<string[]>("db_set_my_names", { names: list });
+  names.setState((known) => ({ names: saved, suggestions: known?.suggestions ?? [] }));
+  databaseChanged();
+  return saved;
+}
+
+/** Splits typed names at commas (names themselves may contain spaces). */
+export function parseNames(text: string): string[] {
+  return text
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+}
+
+export type PersonalScore = {
+  wins: number;
+  draws: number;
+  losses: number;
+  games: number;
+  /** Points per game in percent: a win is 1, a draw ½. */
+  percent: number;
+};
+
+/** How a player with `side` scored in `counts`, or `undefined` without games. */
+export function personalScore(counts: ResultCounts, side: Color): PersonalScore | undefined {
+  const games = counts.white + counts.draws + counts.black;
+  if (games === 0) return undefined;
+  const [wins, losses] = side === "w" ? [counts.white, counts.black] : [counts.black, counts.white];
+  return {
+    wins,
+    draws: counts.draws,
+    losses,
+    games,
+    percent: Math.round((100 * (wins + counts.draws / 2)) / games),
+  };
+}
 
 /** Shared by every view, so the explorer and the database view notice new games. */
 const changes = createRoot(() => createSignal(0));

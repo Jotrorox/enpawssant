@@ -8,7 +8,8 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
+import { type Color, fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
+import { myNames, personalScore } from "../chess/database";
 import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
 import { engineRevision, enginesConfig, setEngineRoles } from "../chess/engines";
 import {
@@ -27,6 +28,7 @@ import { formatScore, type GameResult, type Score, shareFor } from "../chess/sco
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { CatIcon } from "./Icons";
+import { NamesForm } from "./MyNames";
 import { Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
@@ -380,6 +382,17 @@ const EXPLORER_SOURCES = [
 
 type ExplorerTab = (typeof EXPLORER_SOURCES)[number]["value"];
 
+const PERSPECTIVES = [
+  { value: "all", label: "All games" },
+  { value: "w", label: "You as White" },
+  { value: "b", label: "You as Black" },
+] as const;
+
+type Perspective = (typeof PERSPECTIVES)[number]["value"];
+
+/** Whose games "My games" shows, kept across tabs for the session. */
+const [perspective, setPerspective] = createSignal<Perspective>("all");
+
 /** Rows visible before the move list scrolls, so the notation below keeps its room. */
 const EXPLORER_MAX_HEIGHT = "max-h-[214px]";
 
@@ -387,11 +400,16 @@ function ExplorerCard(props: { session: GameSession }) {
   const session = props.session;
   const [tab, setTab] = createSignal<ExplorerTab>("masters");
   const account = lichessAccount;
+  const side = (): Color | undefined =>
+    perspective() === "all" ? undefined : (perspective() as Color);
+  /** Showing the user's own games, but Mochi doesn't know their names yet. */
+  const needsNames = () => side() !== undefined && myNames()?.names.length === 0;
   const explorer = createExplorer({
     fen: () => session.node().fen,
     source: tab,
+    side,
     // Your own games need no Lichess account.
-    enabled: () => tab() === "mine" || account().status === "signedIn",
+    enabled: () => (tab() === "mine" && !needsNames()) || account().status === "signedIn",
     onSignedOut: markSignedOut,
   });
   const lineFens = () =>
@@ -435,12 +453,29 @@ function ExplorerCard(props: { session: GameSession }) {
         </Show>
       </p>
 
+      <Show when={tab() === "mine"}>
+        <Segmented
+          size="sm"
+          label="Whose games"
+          options={PERSPECTIVES}
+          value={perspective()}
+          onChange={setPerspective}
+          class="mb-1.5 border border-blush-200/80 bg-blush-50"
+        />
+      </Show>
+
       <Switch>
+        <Match when={tab() === "mine" && needsNames()}>
+          <EmptyState class="place-items-stretch">
+            <NamesForm intro="Which names do you play under? Mochi looks for them in your database to show how you score from here." />
+          </EmptyState>
+        </Match>
         <Match when={tab() === "mine" && explorer.state()}>
           {(state) => (
             <ExplorerResults
               state={state()}
               local
+              side={side()}
               knownMoves={knownMoves()}
               onPlay={play}
               onRetry={explorer.retry}
@@ -523,6 +558,8 @@ type ExplorerResultsProps = {
   state: ExplorerState;
   /** Results come from the local game database rather than Lichess. */
   local?: boolean;
+  /** Only the user's games with this colour: scores are shown from their side. */
+  side?: Color;
   knownMoves: Set<string | undefined>;
   onPlay: (uci: string) => void;
   onRetry: () => void;
@@ -560,45 +597,72 @@ function ExplorerResults(props: ExplorerResultsProps) {
       </Match>
       <Match when={result()?.moves.length === 0}>
         <EmptyState>
-          {props.local
-            ? "None of your games reached this position. Import games in the Database section."
-            : "No games reached this position yet."}
+          {props.side
+            ? `You haven't reached this position as ${props.side === "w" ? "White" : "Black"} yet.`
+            : props.local
+              ? "None of your games reached this position. Import games in the Database section."
+              : "No games reached this position yet."}
         </EmptyState>
       </Match>
       <Match when={result()}>
         {(result) => (
-          <div
-            class={`${EXPLORER_MAX_HEIGHT} overflow-y-auto transition-opacity ${
-              props.state.status === "loading" ? "opacity-50" : ""
-            }`}
-            aria-busy={props.state.status === "loading"}
-          >
-            <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
-              <thead class="sticky top-0 z-10 bg-white">
-                <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
-                  <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
-                  <th class="w-[76px] py-1 text-right font-bold">Games</th>
-                  <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={result().moves}>
-                  {(move) => (
-                    <ExplorerRowView
-                      label={move.san}
-                      counts={move}
-                      title={
-                        move.averageRating ? `Average rating ${move.averageRating}` : undefined
-                      }
-                      highlighted={props.knownMoves.has(move.uci)}
-                      onClick={() => props.onPlay(move.uci)}
-                    />
-                  )}
-                </For>
-                <ExplorerRowView label="Σ" counts={result()} title="All games" muted />
-              </tbody>
-            </table>
-          </div>
+          <>
+            <Show when={props.side && personalScore(result(), props.side)}>
+              {(score) => (
+                <p class="mb-1 px-2.5 text-[13px]" aria-live="polite">
+                  You score <span class="font-bold">{score().percent}%</span> from here
+                  <span class="text-muted">
+                    {" "}
+                    · {score().wins} won, {score().draws} drawn, {score().losses} lost
+                  </span>
+                </p>
+              )}
+            </Show>
+            <div
+              class={`${EXPLORER_MAX_HEIGHT} overflow-y-auto transition-opacity ${
+                props.state.status === "loading" ? "opacity-50" : ""
+              }`}
+              aria-busy={props.state.status === "loading"}
+            >
+              <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
+                <thead class="sticky top-0 z-10 bg-white">
+                  <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
+                    <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
+                    <th class="w-[76px] py-1 text-right font-bold">Games</th>
+                    <Show when={props.side}>
+                      <th class="w-[56px] py-1 text-right font-bold" title="Your score">
+                        You
+                      </th>
+                    </Show>
+                    <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={result().moves}>
+                    {(move) => (
+                      <ExplorerRowView
+                        label={move.san}
+                        counts={move}
+                        side={props.side}
+                        title={
+                          move.averageRating ? `Average rating ${move.averageRating}` : undefined
+                        }
+                        highlighted={props.knownMoves.has(move.uci)}
+                        onClick={() => props.onPlay(move.uci)}
+                      />
+                    )}
+                  </For>
+                  <ExplorerRowView
+                    label="Σ"
+                    counts={result()}
+                    side={props.side}
+                    title="All games"
+                    muted
+                  />
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Match>
     </Switch>
@@ -619,6 +683,8 @@ function explorerErrorMessage(error: ExplorerError): string {
 type ExplorerRowProps = {
   label: string;
   counts: ResultCounts;
+  /** Adds the user's score with this colour. */
+  side?: Color;
   title?: string;
   highlighted?: boolean;
   /** The totals row is not clickable. */
@@ -646,6 +712,13 @@ function ExplorerRowView(props: ExplorerRowProps) {
       <td class={`py-1.5 text-right font-mono text-[13px] ${cell()}`}>
         {totalGames(props.counts).toLocaleString("en-US")}
       </td>
+      <Show when={props.side}>
+        {(side) => (
+          <td class={`py-1.5 text-right font-mono text-[13px] font-bold ${cell()}`}>
+            {personalScore(props.counts, side())?.percent ?? 0}%
+          </td>
+        )}
+      </Show>
       <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 ${cell()}`}>
         <div class="flex h-[22px] overflow-hidden rounded-full bg-white text-[11px] font-bold ring-1 ring-blush-200">
           <ResultSegment percent={shares().white} class="text-ink" />

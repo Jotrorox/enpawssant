@@ -1,3 +1,4 @@
+mod blunders;
 mod database;
 mod engine;
 mod engines;
@@ -8,6 +9,7 @@ mod pgn;
 mod puzzles;
 mod store;
 
+use blunders::Blunders;
 use database::Database;
 use engine::{Clock, Engine, EngineEvent, EngineInfo, Opponent, Strength};
 use engines::Engines;
@@ -103,6 +105,7 @@ pub fn run() {
         .manage(Lichess::default())
         .manage(Database::default())
         .manage(Puzzles::default())
+        .manage(Blunders::default())
         .invoke_handler(tauri::generate_handler![
             engine_info,
             engine_analyze,
@@ -135,6 +138,9 @@ pub fn run() {
             database::db_import_files,
             database::db_import_paths,
             database::db_cancel_import,
+            database::db_my_names,
+            database::db_set_my_names,
+            database::db_find_game,
             explorer::explorer_moves,
             explorer::opening_name,
             explorer::lichess_account,
@@ -143,6 +149,10 @@ pub fn run() {
             explorer::lichess_sign_out,
             puzzles::puzzles_status,
             puzzles::puzzles_next,
+            puzzles::puzzles_next_own,
+            puzzles::puzzles_clear_own,
+            blunders::puzzles_find_blunders,
+            blunders::puzzles_cancel_blunders,
             puzzles::puzzles_record,
             puzzles::puzzles_finish_run,
             puzzles::puzzles_reset_progress,
@@ -155,8 +165,9 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 let (engine, opponent) = (app.state::<Engine>(), app.state::<Opponent>());
+                let blunders = app.state::<Blunders>();
                 tauri::async_runtime::block_on(async {
-                    tokio::join!(engine.shutdown(), opponent.shutdown());
+                    tokio::join!(engine.shutdown(), opponent.shutdown(), blunders.shutdown());
                 });
             }
         });
