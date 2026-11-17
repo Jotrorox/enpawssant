@@ -73,6 +73,12 @@ export const clearDatabase = () => invoke<void>("db_clear");
 
 export const addGame = (game: PgnGame) => invoke<AddedGame>("db_add_game", { game });
 
+export type AddedGames = { imported: number; duplicates: number; failed: number };
+
+/** Saves several games at once; `source` names where they came from, e.g. "Lichess". */
+export const addGames = (games: PgnGame[], source: string) =>
+  invoke<AddedGames>("db_add_games", { games, source });
+
 export const exploreDatabase = (fen: string) => invoke<ExplorerResult>("db_explorer", { fen });
 
 /** Shared by every view, so the explorer and the database view notice new games. */

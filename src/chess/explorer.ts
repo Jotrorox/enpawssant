@@ -26,6 +26,7 @@ export type Opening = { eco: string; name: string };
 export type ExplorerError =
   | { kind: "signedOut" }
   | { kind: "rateLimited" }
+  | { kind: "notFound" }
   | { kind: "failed"; message: string };
 
 export type ExplorerState =

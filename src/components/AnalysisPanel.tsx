@@ -611,6 +611,8 @@ function explorerErrorMessage(error: ExplorerError): string {
       return "Lichess signed you out. Sign in again to keep exploring.";
     case "rateLimited":
       return "Lichess asked Mochi to slow down. Give it a minute, then try again.";
+    case "notFound":
+      return "Lichess has nothing for this position.";
     case "failed":
       return `Mochi couldn't reach Lichess: ${error.message}.`;
   }

@@ -22,6 +22,7 @@ import {
 import { createEngineAnalysis, lineArrows, positionScore } from "./chess/engine";
 import { enginesConfig, loadEngines } from "./chess/engines";
 import { readPgnFile, rememberFile } from "./chess/files";
+import { colorOf } from "./chess/online";
 import type { ImportedGame, ParsedPgn, PgnGame } from "./chess/pgn";
 import { mainline } from "./chess/review";
 import type { Score } from "./chess/score";
@@ -32,7 +33,7 @@ import { type DatabaseRequest, DatabaseView } from "./components/DatabaseView";
 import { EnginesView } from "./components/EnginesView";
 import { FilesView } from "./components/FilesView";
 import { PawIcon } from "./components/Icons";
-import { ExportDialog, ImportDialog } from "./components/PgnDialogs";
+import { ExportDialog, ImportDialog, type ImportSource } from "./components/PgnDialogs";
 import { type NewGame, PlayDialog } from "./components/PlayDialog";
 import { PuzzlesView } from "./components/PuzzlesView";
 import { type Section, SideRail } from "./components/SideRail";
@@ -50,14 +51,27 @@ const TOAST_MS = 5000;
 /** Depth every position is searched to by "Analyze full game". */
 const REVIEW_DEPTH = 16;
 
-/** A workspace tab, the game open in it and the game being played against the engine there. */
-type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame };
+/**
+ * A workspace tab, the game open in it and the game being played against the engine there.
+ * `orientation` is the side the board starts facing.
+ */
+type Tab = WorkspaceTab & { session: GameSession; game?: EngineGame; orientation?: Color };
 
 export default function App() {
   let opened = 0;
-  const createTab = (game: PgnGame, title = gameTitle(game), position?: number[]): Tab => {
+  const createTab = (
+    game: PgnGame,
+    title = gameTitle(game),
+    position?: number[],
+    orientation?: Color,
+  ): Tab => {
     opened += 1;
-    return { id: `game-${opened}`, title, session: createGameSession(game, { position }) };
+    return {
+      id: `game-${opened}`,
+      title,
+      session: createGameSession(game, { position }),
+      orientation,
+    };
   };
   /** A tab for a new game against the engine; it is marked live while the game is on. */
   const createEngineGameTab = ({ settings, startFen, engineName }: NewGame): Tab => {
@@ -94,6 +108,7 @@ export default function App() {
   const [activeId, setActiveId] = createSignal<string | undefined>(initialActive.id);
   const activeTab = () => tabs().find((tab) => tab.id === activeId());
   const [importing, setImporting] = createSignal(false);
+  const [importSource, setImportSource] = createSignal<ImportSource>("pgn");
   /** Games read from dropped files, shown in the import dialog's game picker. */
   const [preset, setPreset] = createSignal<ParsedPgn & { name?: string }>();
   const [exporting, setExporting] = createSignal(false);
@@ -145,7 +160,19 @@ export default function App() {
     setSection("board");
   };
 
-  const openGames = (games: PgnGame[]) => openTabs(games.map((game) => createTab(game)));
+  /** Opens games in new tabs; the board faces `player`'s side in the games they played. */
+  const openGames = (games: PgnGame[], player?: string) =>
+    openTabs(
+      games.map((game) =>
+        createTab(game, gameTitle(game), undefined, player ? colorOf(game, player) : undefined),
+      ),
+    );
+
+  const showImport = (source: ImportSource, preset?: ParsedPgn & { name?: string }) => {
+    setImportSource(source);
+    setPreset(preset);
+    setImporting(true);
+  };
 
   const newTab = () => openTabs([createBoard()]);
 
@@ -162,8 +189,7 @@ export default function App() {
     } else if (parsed.games.length === 0) {
       notify(parsed.errors[0] ?? "No games found. Is this a PGN file?", "error");
     } else {
-      setPreset(parsed);
-      setImporting(true);
+      showImport("pgn", parsed);
     }
   };
 
@@ -290,6 +316,7 @@ export default function App() {
                 canAddCurrent={!!activeTab()}
                 onAddCurrent={() => void saveToDatabase()}
                 onImportFiles={() => void runImport(importFiles)}
+                onImportOnline={() => showImport("lichess")}
                 onOpenGame={(id, ply) => void openFromDatabase(id, ply)}
                 notify={notify}
               />
@@ -329,10 +356,8 @@ export default function App() {
                   <GameWorkspace
                     session={tab.session}
                     game={tab.game}
-                    onImport={() => {
-                      setPreset(undefined);
-                      setImporting(true);
-                    }}
+                    orientation={tab.orientation}
+                    onImport={() => showImport("pgn")}
                     onExport={() => setExporting(true)}
                     onSaveToDatabase={() => void saveToDatabase()}
                     onPlay={() => setChoosingGame(true)}
@@ -346,8 +371,9 @@ export default function App() {
       <ImportDialog
         open={importing()}
         preset={preset()}
+        source={importSource()}
         onClose={() => setImporting(false)}
-        onOpen={(games) => openGames(games)}
+        onOpen={openGames}
       />
       <ExportDialog
         open={exporting()}
@@ -386,6 +412,7 @@ function count(n: number, noun: string): string {
 function GameWorkspace(props: {
   session: GameSession;
   game?: EngineGame;
+  orientation?: Color;
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
@@ -393,7 +420,9 @@ function GameWorkspace(props: {
 }) {
   const session = props.session;
   const game = props.game;
-  const [orientation, setOrientation] = createSignal<Color>(game?.settings.color ?? "w");
+  const [orientation, setOrientation] = createSignal<Color>(
+    game?.settings.color ?? props.orientation ?? "w",
+  );
   const fen = () => session.node().fen;
   /** The engine keeps its opinions to itself while a game against it is on. */
   const playing = () => game?.playing() ?? false;
