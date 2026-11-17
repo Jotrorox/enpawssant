@@ -3,7 +3,7 @@
 // follows them. The user's own moves show at once and are confirmed (or undone) by the stream.
 // Like the session, the game outlives the tab's view, and it reconnects when the stream drops.
 
-import { batch, createMemo, createRoot, createSignal, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, createRoot, createSignal, onCleanup } from "solid-js";
 import { type Color, fenTurn } from "../chess/board";
 import { markSignedOut } from "../chess/lichess";
 import {
@@ -47,6 +47,8 @@ const TICK_MS = 100;
 const RETRY_MS = [1000, 2000, 4000, 8000, 15_000, 30_000];
 /** Attempts without ever reaching the game before giving up. */
 const MAX_FAILED_STARTS = 6;
+/** How long to wait after Lichess rate limited the app, in ms. */
+const RATE_LIMIT_MS = 60_000;
 /** Lichess's sentinel for "no clock" in correspondence and unlimited games. */
 const NO_CLOCK_MS = 2_000_000_000;
 
@@ -113,11 +115,17 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
     let disposed = false;
     let stream: LichessStream | undefined;
 
-    const color = (): Color => {
+    /** The user's side, settled once the game is matched to the signed-in user. */
+    const [side, setSide] = createSignal<Color>();
+    createEffect(() => {
       const game = full();
       const username = options.username();
-      return (game && username && userColor(game, username)) || options.color || "w";
-    };
+      const found = game && username && userColor(game, username);
+      if (found && !side()) setSide(found);
+    });
+    const color = (): Color => side() ?? options.color ?? "w";
+    /** Moves wait until it's clear which side is the user's. */
+    const sideKnown = () => side() !== undefined || options.color !== undefined;
     const line = () => mainline(session.tree);
     const endId = () => {
       const ids = line();
@@ -259,6 +267,12 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
             setConnection("closed");
             return;
           }
+          // Being rate limited isn't the game's fault: wait it out without giving up.
+          if (problem.kind === "rateLimited") {
+            setConnection("reconnecting");
+            await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_MS));
+            continue;
+          }
           failures += 1;
           if (!full() && failures >= MAX_FAILED_STARTS) {
             setError(`Mochi couldn't reach this game: ${describeLichessError(problem)}`);
@@ -275,6 +289,10 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
     void follow();
 
     const timer = setInterval(() => setNow(performance.now()), TICK_MS);
+    // Nothing ticks once the game is over.
+    createEffect(() => {
+      if (connection() === "closed") clearInterval(timer);
+    });
     onCleanup(() => {
       disposed = true;
       clearInterval(timer);
@@ -296,7 +314,12 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
     };
 
     const canMove = () =>
-      !!full() && playing() && !pending() && turn() === color() && session.currentId() === endId();
+      !!full() &&
+      sideKnown() &&
+      playing() &&
+      !pending() &&
+      turn() === color() &&
+      session.currentId() === endId();
 
     const move = (input: MoveInput) => {
       if (!canMove()) return;
@@ -328,7 +351,7 @@ export function createOnlineGame(session: GameSession, gameId: string, options: 
     };
 
     const canPremove = () =>
-      !!full() && playing() && turn() !== color() && session.currentId() === endId();
+      !!full() && sideKnown() && playing() && turn() !== color() && session.currentId() === endId();
     const premoves = createPremove({ canMove, canPremove, move });
 
     const offers = (side: Color) => {

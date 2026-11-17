@@ -274,7 +274,7 @@ impl Lichess {
             .send()
             .await
             .map_err(|e| RequestError::failed(without_url(e)))?;
-        self.check(response)
+        self.check(response, true)
             .await?
             .json()
             .await
@@ -284,7 +284,9 @@ impl Lichess {
     /// Sends an authenticated request to lichess.org (`path` starts with `/`)
     /// and returns its JSON response, or `null` for an empty or non-JSON one.
     /// Unlike explorer lookups these are the user's own actions, like moves,
-    /// so they don't queue behind other requests.
+    /// so they neither queue behind other requests nor wait out the pause
+    /// after the explorer was rate limited: a move held back for a minute
+    /// could lose the game on time.
     pub async fn send(
         &self,
         method: reqwest::Method,
@@ -292,7 +294,6 @@ impl Lichess {
         form: &[(&str, String)],
     ) -> Result<serde_json::Value, RequestError> {
         let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
-        self.ensure_not_paused()?;
         let mut request = self
             .http
             .request(method, format!("{LICHESS}{path}"))
@@ -305,7 +306,7 @@ impl Lichess {
             .await
             .map_err(|e| RequestError::failed(without_url(e)))?;
         let body = self
-            .check(response)
+            .check(response, false)
             .await?
             .bytes()
             .await
@@ -324,7 +325,6 @@ impl Lichess {
         mut on_line: impl FnMut(serde_json::Value),
     ) -> Result<bool, RequestError> {
         let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
-        self.ensure_not_paused()?;
         let url = format!("{LICHESS}{path}");
         let request = match form {
             Some(form) => self.stream_http.post(url).form(form),
@@ -335,7 +335,7 @@ impl Lichess {
             response = request.send() => response.map_err(|e| RequestError::failed(without_url(e)))?,
             _ = &mut stop => return Ok(false),
         };
-        let mut response = self.check(response).await?;
+        let mut response = self.check(response, false).await?;
         let mut lines = LineBuffer::default();
         loop {
             let chunk = tokio::select! {
@@ -364,8 +364,13 @@ impl Lichess {
     }
 
     /// Turns error statuses into `RequestError`s, with Lichess's own message
-    /// where it gives one (e.g. "Not your turn, or game already over").
-    async fn check(&self, response: reqwest::Response) -> Result<reqwest::Response, RequestError> {
+    /// where it gives one (e.g. "Not your turn, or game already over"). Being
+    /// rate limited pauses further explorer requests when `pause` is set.
+    async fn check(
+        &self,
+        response: reqwest::Response,
+        pause: bool,
+    ) -> Result<reqwest::Response, RequestError> {
         match response.status() {
             StatusCode::UNAUTHORIZED => {
                 // The token was revoked or has expired; it is of no further use.
@@ -374,7 +379,9 @@ impl Lichess {
                 Err(RequestError::SignedOut)
             }
             StatusCode::TOO_MANY_REQUESTS => {
-                *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                if pause {
+                    *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                }
                 Err(RequestError::RateLimited)
             }
             status if !status.is_success() => {

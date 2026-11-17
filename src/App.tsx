@@ -124,6 +124,7 @@ export default function App() {
   const saved = loadWorkspace();
   const restored = (saved?.tabs ?? []).flatMap((tab) => {
     try {
+      // Only games still on when the app closed were saved with their Lichess ID.
       const unfinished = header(tab.game, "Result") === "*";
       return [
         tab.lichessId && unfinished
@@ -146,7 +147,11 @@ export default function App() {
    * engine, the opening explorer and every way of getting the position out (Copy FEN, Export PGN,
    * the database's board position) are off in every tab, not just the game's.
    */
-  const liveTab = createMemo(() => tabs().find((tab) => tab.live));
+  // An open correspondence game only keeps its own tab fair: it can last weeks, and the engine
+  // in it stays off until it's over.
+  const liveTab = createMemo(() =>
+    tabs().find((tab) => tab.live && !(tab.game?.kind === "online" && tab.game.correspondence())),
+  );
   const fairPlay = () => liveTab() !== undefined;
   const [importing, setImporting] = createSignal(false);
   /** Games read from dropped files, shown in the import dialog's game picker. */
@@ -176,7 +181,8 @@ export default function App() {
         title: tab.title,
         game: tab.session.toPgn(),
         position: tab.session.position(),
-        lichessId: tab.lichessId,
+        // Only games still on reconnect next time.
+        lichessId: tab.game?.playing() ? tab.lichessId : undefined,
       })),
       active: Math.max(
         0,
@@ -188,6 +194,7 @@ export default function App() {
   const closeTab = (id: string) => {
     const index = tabs().findIndex((tab) => tab.id === id);
     const closing = tabs()[index];
+    if (closing?.lichessId) closedGames.add(closing.lichessId);
     const remaining = tabs().filter((tab) => tab.id !== id);
     if (activeId() === id) setActiveId(remaining[Math.min(index, remaining.length - 1)]?.id);
     setTabs(remaining);
@@ -221,6 +228,7 @@ export default function App() {
 
   /** Switches to the tab of Lichess game `id`, opening one if needed. */
   const openOnlineGame = ({ id, color }: { id: string; color?: Color }) => {
+    closedGames.delete(id);
     const open = tabs().find((tab) => tab.lichessId === id);
     if (open) selectTab(open.id);
     else openTabs([createOnlineTab(id, { color })]);
@@ -231,11 +239,16 @@ export default function App() {
   // reports every ongoing game when the event stream connects. Correspondence games otherwise
   // stay in the Play section's list.
   const expectedGames = new Set<string>();
+  /** Games whose tab the user closed; Lichess reports them again whenever it reconnects. */
+  const closedGames = new Set<string>();
   onMount(() => {
     const stopGames = lichessEvents.onGameStart((game) => {
       const expected = expectedGames.delete(game.gameId);
       if (tabs().some((tab) => tab.lichessId === game.gameId)) return;
-      if (expected || game.speed !== "correspondence") {
+      // Games played elsewhere at speeds the Board API can't play (bullet) aren't for us.
+      if (game.compat?.board === false) return;
+      const realtime = game.speed !== "correspondence" && !closedGames.has(game.gameId);
+      if (expected || realtime) {
         openOnlineGame({ id: game.gameId, color: toColor(game.color) });
       }
     });
@@ -442,7 +455,7 @@ export default function App() {
                   <GameWorkspace
                     session={tab.session}
                     game={tab.game}
-                    fairPlay={fairPlay()}
+                    fairPlay={fairPlay() || !!tab.live}
                     liveGame={
                       liveTab() && liveTab() !== tab
                         ? {
@@ -529,15 +542,11 @@ function GameWorkspace(props: {
   const session = props.session;
   const game = props.game;
   const [orientation, setOrientation] = createSignal<Color>(game?.color() ?? "w");
-  // A Lichess game only says which side the user plays once it has loaded.
+  // A Lichess game only says which side the user plays once it has loaded. Turning the board to
+  // it happens once, so flipping it by hand sticks.
   if (game?.kind === "online") {
-    createEffect(
-      on(
-        () => game.full() !== undefined && game.color(),
-        (side) => side && setOrientation(side),
-        { defer: true },
-      ),
-    );
+    const side = createMemo(() => (game.full() ? game.color() : undefined));
+    createEffect(on(side, (current) => current && setOrientation(current), { defer: true }));
   }
   const fen = () => session.node().fen;
   /** The engine keeps its opinions to itself while any game is on. */

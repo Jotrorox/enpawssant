@@ -89,8 +89,9 @@ While any game is in progress the whole app plays fair, not just the game's tab.
 (including an engine running alongside), the eval bar and graph, arrows, the opening explorer and
 full-game analysis are off in every tab, and so is every way of getting the position out: Copy FEN,
 Export PGN and the database's **Board position** button. Other tabs say where the game is and take
-you back to it. Everything returns as soon as the game ends. An open correspondence game counts as
-in progress, so close its tab to analyse other games between moves.
+you back to it. Everything returns as soon as the game ends. Correspondence games can last weeks,
+so they only keep their own tab fair: the engine and the explorer stay off there until the game is
+over, while other tabs work as usual. (Lichess's rules still forbid engine help in them.)
 
 You can step back through the moves during a game; the board takes your move again once you're
 back at the end. A game's result and time control go into the PGN headers.

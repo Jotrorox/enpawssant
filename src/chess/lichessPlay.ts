@@ -127,6 +127,8 @@ export type GameInfo = {
   speed?: Speed;
   status?: { id: number; name: GameStatus };
   winner?: LichessColor;
+  /** Whether the Board API can play the game; it can't play bullet, for one. */
+  compat?: { bot: boolean; board: boolean };
 };
 
 export type ChallengeUser = { id: string; name: string; rating?: number; title?: string | null };

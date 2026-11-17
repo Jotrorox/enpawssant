@@ -22,6 +22,8 @@ import {
 
 /** Waits between reconnection attempts, growing up to the last one, in ms. */
 const RETRY_MS = [2000, 5000, 10_000, 30_000, 60_000];
+/** How long to wait after Lichess rate limited the app, in ms. */
+const RATE_LIMIT_MS = 60_000;
 
 type GameStartListener = (game: GameInfo) => void;
 
@@ -85,13 +87,17 @@ const store = createRoot(() => {
       const stop = () => stream.stop();
       stoppers.add(stop);
       void refreshGames();
+      let wait: number | undefined;
       try {
         await stream.done;
       } catch (reason) {
-        if (toLichessError(reason).kind === "signedOut") {
+        const problem = toLichessError(reason);
+        if (problem.kind === "signedOut") {
           markSignedOut();
           return;
         }
+        // Lichess allows one event stream per account and may still count the last one.
+        if (problem.kind === "rateLimited") wait = RATE_LIMIT_MS;
         failures += 1;
       } finally {
         stoppers.delete(stop);
@@ -99,7 +105,7 @@ const store = createRoot(() => {
       if (current !== session) return;
       setConnected(false);
       await new Promise((resolve) =>
-        setTimeout(resolve, RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]),
+        setTimeout(resolve, wait ?? RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]),
       );
     }
   };

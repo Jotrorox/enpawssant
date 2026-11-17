@@ -7,7 +7,7 @@
 //! lines reach the frontend as JSON, which it interprets; this module only
 //! checks what goes out, so that IDs and moves can't reach other endpoints.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use reqwest::Method;
@@ -26,33 +26,59 @@ const CORRESPONDENCE_DAYS: [u32; 7] = [1, 2, 3, 5, 7, 10, 14];
 /// The longest chat message Lichess accepts.
 const MAX_CHAT_CHARS: usize = 140;
 
+/// Stop requests remembered for streams that haven't started yet.
+const MAX_EARLY_STOPS: usize = 256;
+
 /// The streams that are open, by the ID the frontend gave them.
 #[derive(Default)]
 pub struct Streams {
-    open: Mutex<HashMap<u32, oneshot::Sender<()>>>,
+    state: Mutex<StreamState>,
+}
+
+#[derive(Default)]
+struct StreamState {
+    open: HashMap<u32, oneshot::Sender<()>>,
+    /// IDs stopped before their stream registered: the stop command can run
+    /// before the async command that opens the stream gets going.
+    stopped_early: HashSet<u32>,
 }
 
 impl Streams {
-    /// Registers stream `id`, stopping an earlier stream with the same ID.
+    /// Registers stream `id`, stopping an earlier stream with the same ID. The
+    /// stream stops at once if it was stopped before it started.
     fn open(&self, id: u32) -> oneshot::Receiver<()> {
         let (stop, stopped) = oneshot::channel();
-        if let Some(previous) = self.open.lock().unwrap().insert(id, stop) {
+        let mut state = self.state.lock().unwrap();
+        if state.stopped_early.remove(&id) {
+            let _ = stop.send(());
+        } else if let Some(previous) = state.open.insert(id, stop) {
             let _ = previous.send(());
         }
         stopped
     }
 
     fn stop(&self, id: u32) {
-        if let Some(stop) = self.open.lock().unwrap().remove(&id) {
-            let _ = stop.send(());
+        let mut state = self.state.lock().unwrap();
+        match state.open.remove(&id) {
+            Some(stop) => {
+                let _ = stop.send(());
+            }
+            None => {
+                // Either it ended already or it hasn't started; IDs are never reused, so
+                // remembering a few is harmless.
+                if state.stopped_early.len() >= MAX_EARLY_STOPS {
+                    state.stopped_early.clear();
+                }
+                state.stopped_early.insert(id);
+            }
         }
     }
 
     /// Forgets stream `id` once it has ended on its own.
     fn close(&self, id: u32) {
-        let mut open = self.open.lock().unwrap();
-        if open.get(&id).is_some_and(|stop| stop.is_closed()) {
-            open.remove(&id);
+        let mut state = self.state.lock().unwrap();
+        if state.open.get(&id).is_some_and(|stop| stop.is_closed()) {
+            state.open.remove(&id);
         }
     }
 }
@@ -503,6 +529,21 @@ mod tests {
         assert_eq!(check_username(" Mochi_the-Cat ").unwrap(), "Mochi_the-Cat");
         assert!(check_username("a").is_err());
         assert!(check_username("mochi/abort").is_err());
+    }
+
+    #[test]
+    fn stops_streams_even_before_they_start() {
+        let streams = Streams::default();
+        let mut running = streams.open(1);
+        assert!(running.try_recv().is_err());
+        streams.stop(1);
+        assert!(running.try_recv().is_ok());
+
+        streams.stop(2);
+        let mut late = streams.open(2);
+        assert!(late.try_recv().is_ok());
+        let mut again = streams.open(3);
+        assert!(again.try_recv().is_err());
     }
 
     #[test]

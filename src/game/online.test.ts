@@ -134,6 +134,14 @@ describe("createOnlineGame", () => {
     expect(game.timeLeft("b")).toBe(600_000);
   });
 
+  test("waits to take moves until the user's side is known", async () => {
+    const { game } = setup("");
+    emit?.(full());
+    await settle();
+    expect(game.turn()).toBe("w");
+    expect(game.canMove()).toBe(false);
+  });
+
   test("tells the user's side from the players", async () => {
     const { game } = setup("WHISKERS");
     emit?.(full());
