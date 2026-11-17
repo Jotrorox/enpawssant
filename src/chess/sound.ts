@@ -52,7 +52,7 @@ type Engine = {
 };
 
 /** Output gain for a volume setting: the default volume plays at full level, 100 a bit louder. */
-export function volumeGain(volume: number): number {
+function volumeGain(volume: number): number {
   return (Math.max(0, volume) / DEFAULT_SETTINGS.volume) ** 2;
 }
 let engine: Engine | undefined;

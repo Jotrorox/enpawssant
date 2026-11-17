@@ -26,7 +26,7 @@ export function winPercent(score: Score): number {
 }
 
 /** How many percentage points of winning chances `mover` gave away with a move. */
-export function winLoss(before: Score, after: Score, mover: Color): number {
+function winLoss(before: Score, after: Score, mover: Color): number {
   const loss = winPercent(before) - winPercent(after);
   return mover === "w" ? loss : -loss;
 }
@@ -105,7 +105,7 @@ export function finalScore(fen: string): Score | undefined {
 }
 
 /** A node's stored evaluation, or its result when the game is over there. */
-export function storedScore(node: MoveNode): Score | undefined {
+function storedScore(node: MoveNode): Score | undefined {
   return node.eval ?? finalScore(node.fen);
 }
 

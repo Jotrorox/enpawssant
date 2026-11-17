@@ -43,7 +43,7 @@ const TICK_MS = 100;
 const other = (side: Color): Color => (side === "w" ? "b" : "w");
 
 /** The engine's name with its strength, e.g. `Stockfish 19 (1500)` or `Stockfish 19 (level 5)`. */
-export function opponentName(engineName: string, strength: Strength): string {
+function opponentName(engineName: string, strength: Strength): string {
   return "elo" in strength
     ? `${engineName} (${strength.elo})`
     : `${engineName} (level ${strength.skill})`;

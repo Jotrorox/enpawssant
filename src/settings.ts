@@ -69,7 +69,7 @@ const clampInt = (value: unknown, min: number, max: number, fallback: number) =>
     : fallback;
 
 /** Reads stored settings, falling back to the default for anything missing or unknown. */
-export function parseSettings(text: string | null): Settings {
+function parseSettings(text: string | null): Settings {
   let data: Record<string, unknown> = {};
   try {
     const parsed: unknown = text ? JSON.parse(text) : {};

@@ -76,10 +76,6 @@ export function loadEngines(): Promise<void> {
   return loading;
 }
 
-export function engineName(id: string | null | undefined): string | undefined {
-  return state.config.engines.find((engine) => engine.id === id)?.name;
-}
-
 /** Asks for an engine binary and adds it. Resolves to whether one was added. */
 export async function addEngine(): Promise<boolean> {
   const config = await invoke<EnginesConfig | null>("engines_add");

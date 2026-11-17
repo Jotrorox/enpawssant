@@ -95,7 +95,7 @@ export function toggleQualityNag(nags: readonly number[], nag: Nag): number[] {
 }
 
 /** The code `choice` uses after a move by `mover`. */
-export const nagCode = (choice: NagChoice, mover: Color) =>
+const nagCode = (choice: NagChoice, mover: Color) =>
   mover === "b" ? (choice.black ?? choice.code) : choice.code;
 
 /** Whether `nags` include `choice`, for either side. */
