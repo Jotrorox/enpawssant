@@ -224,7 +224,7 @@ function BoardToolbar(props: {
           <CheckIcon class="size-5 text-nag-good" />
         </Show>
       </IconButton>
-      <IconButton label="Import PGN" onClick={() => props.onImport()}>
+      <IconButton label="Import games" onClick={() => props.onImport()}>
         <ImportIcon />
       </IconButton>
       <IconButton label="Export PGN" onClick={() => props.onExport()}>

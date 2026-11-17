@@ -29,7 +29,7 @@ import {
   searchGames,
 } from "../chess/database";
 import { formatSize } from "../chess/files";
-import { DatabaseIcon, ImportIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
+import { DatabaseIcon, DownloadIcon, ImportIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
 import {
   Card,
   EmptyState,
@@ -67,6 +67,8 @@ type DatabaseViewProps = {
   canAddCurrent: boolean;
   onAddCurrent: () => void;
   onImportFiles: () => void;
+  /** Opens the import dialog on its Lichess and Chess.com tabs. */
+  onImportOnline: () => void;
   onOpenGame: (id: number, ply: number | null) => void;
   notify: (message: string, tone?: "info" | "error") => void;
 };
@@ -206,6 +208,10 @@ export function DatabaseView(props: DatabaseViewProps) {
           <PlusIcon class="size-[18px]" />
           Add board game
         </button>
+        <button type="button" class={SECONDARY_BUTTON} onClick={() => props.onImportOnline()}>
+          <DownloadIcon class="size-[18px]" />
+          From Lichess or Chess.com…
+        </button>
         <button
           type="button"
           class={PRIMARY_BUTTON}
@@ -324,8 +330,9 @@ export function DatabaseView(props: DatabaseViewProps) {
               <DatabaseIcon class="size-8 text-rose" />
               <span class="font-bold text-ink">The database is empty</span>
               <span>
-                Import PGN files, drop them onto this window or save the game on the board. Games
-                are indexed by position, so you can find every game that reached a position.
+                Import PGN files or your games from Lichess and Chess.com, drop files onto this
+                window or save the game on the board. Games are indexed by position, so you can find
+                every game that reached a position.
               </span>
             </EmptyState>
           </Match>

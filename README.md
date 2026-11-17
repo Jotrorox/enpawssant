@@ -3,8 +3,8 @@
 A cat-themed chess analysis app for macOS and Windows, built with Tauri 2, SolidJS and Stockfish.
 
 > Early foundation: the board is fully playable, the bundled Stockfish (or any UCI engine) analyses
-> every position live, games can be imported and exported as PGN, kept in a local game database and
-> explored by position, you can play against Stockfish with a clock, and there are puzzles from the
+> every position live, games can be imported and exported as PGN or fetched from Lichess and
+> Chess.com, kept in a local game database and explored by position, you can play against Stockfish with a clock, and there are puzzles from the
 > Lichess puzzle database.
 
 ## The board
@@ -88,6 +88,7 @@ game away: it becomes a variation.
   Files with several games show a picker. Variations, comments, NAGs and lichess-style
   `[%eval]` scores are kept, and illegal moves are skipped with a warning. Imported scores fill
   the eval bar and graph for positions the engine hasn't analysed yet.
+- **Import games** also fetches your games from **Lichess** or **Chess.com** (see below).
 - **Export PGN** shows the game as PGN to copy or save, including variations, comments and NAGs.
 - Open tabs are saved as you go (games, variations, comments and the current position) and reopen
   on the next launch. With nothing to restore, the app starts on an empty board.
@@ -95,6 +96,23 @@ game away: it becomes a variation.
 PGN parsing and writing happen in Rust (`crates/chess-core/src/pgn.rs`, built on `shakmaty` and
 `pgn-reader`). File dialogs are opened from Rust too, so the frontend needs no file system or dialog
 permissions.
+
+## Games from Lichess and Chess.com
+
+The **Lichess** and **Chess.com** tabs of **Import games** (board toolbar, or **From Lichess or
+Chess.com…** in the Database section) fetch a player's games: the latest 1–200, or every game
+between two dates (up to 200 at a time). Only standard chess is fetched, no variants.
+
+- A single game opens straight away; several show the game picker, where you can open them or
+  **add them all to the database**. Games open with the board facing the player's side.
+- The username is remembered per site. For Lichess it starts as the signed-in account, if any.
+- **Lichess** games come from its [games export](https://lichess.org/api#tag/Games/operation/apiGamesUser).
+  It needs no account, but when you're signed in the request uses your token, which Lichess serves
+  faster. Games analysed on Lichess bring their `[%eval]` scores, which fill the eval graph.
+- **Chess.com** games come from its [public API](https://www.chess.com/news/view/published-data-api),
+  which needs no login. It serves games a month at a time, so they are collected month by month,
+  newest first, one request after another as Chess.com asks.
+- Clock times (`[%clk]`) are kept in the PGN but not shown in the move list.
 
 ## Opening explorer
 
@@ -269,6 +287,7 @@ notarization enabled, both the app and the `.dmg` are notarized and stapled. See
     │   ├── explorer.rs     # Opening explorer and opening name commands
     │   ├── files.rs        # File browser: places, folder listings, reading PGN files
     │   ├── lichess.rs      # Lichess sign-in (OAuth PKCE), keychain token, API requests
+    │   ├── online.rs       # Fetching a player's games from Lichess and Chess.com
     │   ├── pgn.rs          # PGN import/export commands and file dialogs
     │   ├── puzzles.rs      # Puzzles: starter pack, rating, streaks, full database download
     │   ├── store.rs        # SQLite files in the app data folder
