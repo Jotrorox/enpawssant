@@ -63,6 +63,8 @@ type DatabaseViewProps = {
   request?: DatabaseRequest;
   /** The position on the board, if a game is open. */
   currentFen?: string;
+  /** A game is in progress, so the position on the board can't be copied into the search. */
+  fairPlay?: boolean;
   /** Whether a game is open to add. */
   canAddCurrent: boolean;
   onAddCurrent: () => void;
@@ -297,8 +299,12 @@ export function DatabaseView(props: DatabaseViewProps) {
           <button
             type="button"
             class={`${SECONDARY_BUTTON} h-9`}
-            disabled={!props.currentFen}
-            title="Search for the position on the board"
+            disabled={!props.currentFen || props.fairPlay}
+            title={
+              props.fairPlay
+                ? "Off while a game is in progress"
+                : "Search for the position on the board"
+            }
             onClick={() => setFen(props.currentFen ?? "")}
           >
             Board position

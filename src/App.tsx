@@ -26,7 +26,7 @@ import type { ImportedGame, ParsedPgn, PgnGame } from "./chess/pgn";
 import { mainline } from "./chess/review";
 import type { Score } from "./chess/score";
 import type { NodeId } from "./chess/tree";
-import { AnalysisPanel } from "./components/AnalysisPanel";
+import { AnalysisPanel, type LiveGame } from "./components/AnalysisPanel";
 import { BoardPanel } from "./components/BoardPanel";
 import { type DatabaseRequest, DatabaseView } from "./components/DatabaseView";
 import { EnginesView } from "./components/EnginesView";
@@ -93,6 +93,13 @@ export default function App() {
   const [tabs, setTabs] = createSignal<Tab[]>(initialTabs);
   const [activeId, setActiveId] = createSignal<string | undefined>(initialActive.id);
   const activeTab = () => tabs().find((tab) => tab.id === activeId());
+  /**
+   * The tab with a game in progress, if any. While there is one the app is in fair-play mode: the
+   * engine, the opening explorer and every way of getting the position out (Copy FEN, Export PGN,
+   * the database's board position) are off in every tab, not just the game's.
+   */
+  const liveTab = createMemo(() => tabs().find((tab) => tab.live));
+  const fairPlay = () => liveTab() !== undefined;
   const [importing, setImporting] = createSignal(false);
   /** Games read from dropped files, shown in the import dialog's game picker. */
   const [preset, setPreset] = createSignal<ParsedPgn & { name?: string }>();
@@ -287,6 +294,7 @@ export default function App() {
               <DatabaseView
                 request={databaseRequest()}
                 currentFen={activeTab()?.session.node().fen}
+                fairPlay={fairPlay()}
                 canAddCurrent={!!activeTab()}
                 onAddCurrent={() => void saveToDatabase()}
                 onImportFiles={() => void runImport(importFiles)}
@@ -329,6 +337,15 @@ export default function App() {
                   <GameWorkspace
                     session={tab.session}
                     game={tab.game}
+                    fairPlay={fairPlay()}
+                    liveGame={
+                      liveTab() && liveTab() !== tab
+                        ? {
+                            title: liveTab()?.title ?? "",
+                            onShow: () => selectTab(liveTab()?.id ?? ""),
+                          }
+                        : undefined
+                    }
                     onImport={() => {
                       setPreset(undefined);
                       setImporting(true);
@@ -350,7 +367,7 @@ export default function App() {
         onOpen={(games) => openGames(games)}
       />
       <ExportDialog
-        open={exporting()}
+        open={exporting() && !fairPlay()}
         session={activeTab()?.session}
         onClose={() => setExporting(false)}
       />
@@ -386,6 +403,10 @@ function count(n: number, noun: string): string {
 function GameWorkspace(props: {
   session: GameSession;
   game?: EngineGame;
+  /** A game is in progress, in this tab or another: no engine, explorer or position export. */
+  fairPlay: boolean;
+  /** The game in progress when it is in another tab. */
+  liveGame?: LiveGame;
   onImport: () => void;
   onExport: () => void;
   onSaveToDatabase: () => void;
@@ -395,8 +416,8 @@ function GameWorkspace(props: {
   const game = props.game;
   const [orientation, setOrientation] = createSignal<Color>(game?.settings.color ?? "w");
   const fen = () => session.node().fen;
-  /** The engine keeps its opinions to itself while a game against it is on. */
-  const playing = () => game?.playing() ?? false;
+  /** The engine keeps its opinions to itself while any game is on. */
+  const fairPlay = () => props.fairPlay;
 
   const [engineOn, setEngineOn] = createSignal(true);
   const primaryId = () => enginesConfig.primary;
@@ -404,13 +425,13 @@ function GameWorkspace(props: {
   const engine = createEngineAnalysis({
     engineId: primaryId,
     fen,
-    enabled: () => engineOn() && !playing(),
+    enabled: () => engineOn() && !fairPlay(),
     multipv: ENGINE_LINES,
   });
   const second = createEngineAnalysis({
     engineId: secondaryId,
     fen,
-    enabled: () => engineOn() && !playing(),
+    enabled: () => engineOn() && !fairPlay(),
     multipv: SECOND_ENGINE_LINES,
   });
   const analysis = () => engine.analysisOf(fen());
@@ -420,7 +441,9 @@ function GameWorkspace(props: {
     return positionScore(engine.analysisOf(node.fen)) ?? node.eval;
   };
   // Positions without either stay empty in the eval graph.
-  const evals = createMemo(() => session.line().map((id) => (playing() ? undefined : scoreOf(id))));
+  const evals = createMemo(() =>
+    session.line().map((id) => (fairPlay() ? undefined : scoreOf(id))),
+  );
 
   /** Searches every main-line position to a fixed depth, then stores and judges the results. */
   const reviewGame = async () => {
@@ -440,7 +463,12 @@ function GameWorkspace(props: {
 
   const arrows = createMemo(() => {
     const current = analysis();
-    return engineOn() && !playing() && current ? lineArrows(current) : [];
+    return engineOn() && !fairPlay() && current ? lineArrows(current) : [];
+  });
+
+  // A full-game analysis stops when a game starts; it can be run again once the game is over.
+  createEffect(() => {
+    if (fairPlay() && engine.reviewProgress()) engine.cancelReview();
   });
 
   onMount(() => {
@@ -491,7 +519,7 @@ function GameWorkspace(props: {
         onPlay={props.onPlay}
         review={engine.reviewProgress()}
         reviewError={engine.reviewError()}
-        reviewDisabled={playing()}
+        fairPlay={fairPlay()}
         onReview={() => void reviewGame()}
         onCancelReview={engine.cancelReview}
       />
@@ -503,10 +531,12 @@ function GameWorkspace(props: {
             ? { id: secondaryId() ?? "", analysis: second.analysisOf(fen()), error: second.error() }
             : undefined
         }
-        score={playing() ? undefined : scoreOf(session.currentId())}
+        score={fairPlay() ? undefined : scoreOf(session.currentId())}
         engineOn={engineOn()}
         onToggleEngine={() => setEngineOn((on) => !on)}
         game={game}
+        fairPlay={fairPlay()}
+        liveGame={props.liveGame}
         onNewGame={props.onPlay}
       />
     </div>

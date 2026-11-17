@@ -47,11 +47,14 @@ type BoardPanelProps = {
   /** Progress of the running full-game analysis, if one is running. */
   review?: ReviewProgress;
   reviewError?: string;
-  /** Full-game analysis waits while a game against the engine is on. */
-  reviewDisabled?: boolean;
+  /** A game is in progress somewhere: full-game analysis, Copy FEN and Export PGN are off. */
+  fairPlay?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 };
+
+/** Tooltip of the buttons fair-play mode turns off. */
+const FAIR_PLAY_OFF = "Off while a game is in progress";
 
 export function BoardPanel(props: BoardPanelProps) {
   return (
@@ -85,7 +88,7 @@ export function BoardPanel(props: BoardPanelProps) {
         onSaveToDatabase={props.onSaveToDatabase}
         onPlay={props.onPlay}
         review={props.review}
-        reviewDisabled={props.reviewDisabled}
+        fairPlay={props.fairPlay}
         onReview={props.onReview}
         onCancelReview={props.onCancelReview}
       />
@@ -174,7 +177,7 @@ function BoardToolbar(props: {
   onSaveToDatabase: () => void;
   onPlay: () => void;
   review?: ReviewProgress;
-  reviewDisabled?: boolean;
+  fairPlay?: boolean;
   onReview: () => void;
   onCancelReview: () => void;
 }) {
@@ -182,6 +185,7 @@ function BoardToolbar(props: {
   let resetTimer: number | undefined;
 
   const copyFen = async () => {
+    if (props.fairPlay) return;
     try {
       await navigator.clipboard.writeText(props.fen);
       setCopied(true);
@@ -200,7 +204,17 @@ function BoardToolbar(props: {
       <IconButton label="Edit position">
         <PencilIcon />
       </IconButton>
-      <IconButton label={copied() ? "FEN copied" : "Copy FEN"} onClick={copyFen}>
+      <IconButton
+        label={
+          props.fairPlay
+            ? `Copy FEN: ${FAIR_PLAY_OFF.toLowerCase()}`
+            : copied()
+              ? "FEN copied"
+              : "Copy FEN"
+        }
+        disabled={props.fairPlay}
+        onClick={copyFen}
+      >
         <Show when={copied()} fallback={<CopyIcon />}>
           <CheckIcon class="size-5 text-nag-good" />
         </Show>
@@ -208,7 +222,11 @@ function BoardToolbar(props: {
       <IconButton label="Import PGN" onClick={() => props.onImport()}>
         <ImportIcon />
       </IconButton>
-      <IconButton label="Export PGN" onClick={() => props.onExport()}>
+      <IconButton
+        label={props.fairPlay ? `Export PGN: ${FAIR_PLAY_OFF.toLowerCase()}` : "Export PGN"}
+        disabled={props.fairPlay}
+        onClick={() => props.onExport()}
+      >
         <ExportIcon />
       </IconButton>
       <IconButton label="Save to the game database" onClick={() => props.onSaveToDatabase()}>
@@ -267,8 +285,8 @@ function BoardToolbar(props: {
           <button
             type="button"
             onClick={() => props.onReview()}
-            disabled={props.reviewDisabled}
-            title={props.reviewDisabled ? "Available once the game is over" : undefined}
+            disabled={props.fairPlay}
+            title={props.fairPlay ? FAIR_PLAY_OFF : undefined}
             class="ml-auto flex h-9 items-center gap-2.5 rounded-xl bg-blush-400 px-5 text-[14px] font-bold whitespace-nowrap text-ink shadow-[inset_0_-2px_0_rgb(224_112_143/0.6)] transition-colors hover:bg-blush-300 disabled:opacity-50 disabled:hover:bg-blush-400"
           >
             <ChartIcon class="size-[18px]" />

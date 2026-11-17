@@ -40,6 +40,9 @@ const PANEL_TABS = [
   { value: "info", label: "Info" },
 ] as const;
 
+/** A game in progress in another tab, which fair-play mode points back to. */
+export type LiveGame = { title: string; onShow: () => void };
+
 /** What one engine found for the current position. */
 export type EngineView = {
   id: string;
@@ -59,6 +62,10 @@ type AnalysisPanelProps = {
   onToggleEngine: () => void;
   /** The game against the engine in this tab, if there is one. */
   game?: EngineGame;
+  /** A game is in progress, here or in another tab: the engine and the explorer are off. */
+  fairPlay: boolean;
+  /** The game in progress when it is in another tab. */
+  liveGame?: LiveGame;
   onNewGame: () => void;
 };
 
@@ -95,8 +102,9 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         <Show when={props.game}>
           {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
         </Show>
-        {/* No help from the engine or the explorer while the game is on. */}
-        <Show when={!props.game?.playing()}>
+        {/* No help from the engine or the explorer while a game is on, in any tab. */}
+        <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>
+        <Show when={!props.fairPlay}>
           <EngineCard
             engine={engine}
             engineId={props.primary.id}
@@ -112,6 +120,31 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         <Notation session={props.session} score={props.score} />
       </Show>
     </div>
+  );
+}
+
+/** Stands in for the engine and the explorer while a game is on in another tab. */
+function FairPlayCard(props: { game: LiveGame }) {
+  return (
+    <Card class="flex shrink-0 items-start gap-3 px-[18px] py-3.5">
+      <span class="grid size-8 shrink-0 place-items-center rounded-full bg-lavender text-ink">
+        <CatIcon class="size-[18px]" />
+      </span>
+      <div class="min-w-0 flex-1">
+        <CardTitle>Fair play</CardTitle>
+        <p class="mt-1 text-[13px] leading-snug text-muted">
+          A game is on in <span class="font-bold text-ink">{props.game.title}</span>, so the engine,
+          the opening explorer, Copy FEN and Export PGN are napping in every tab until it's over.
+        </p>
+      </div>
+      <button
+        type="button"
+        class={`${SECONDARY_BUTTON} shrink-0`}
+        onClick={() => props.game.onShow()}
+      >
+        Go to the game
+      </button>
+    </Card>
   );
 }
 

@@ -47,9 +47,13 @@ The clock button in the board toolbar starts a game against Stockfish in a new t
 - The clocks run in the app and keep running while another tab is open. Checkmate, stalemate,
   threefold repetition, the fifty-move rule and dead positions end the game automatically; running
   out of time loses unless the other side has nothing left to mate with. Resigning takes two clicks.
-- Live analysis, the eval bar, arrows, the opening explorer and full-game analysis wait until the
-  game is over. You can step back through the moves meanwhile; the board takes your move again once
-  you're back at the end.
+- You can step back through the moves meanwhile; the board takes your move again once you're back
+  at the end.
+- **Fair play**: while any game is in progress the whole app plays fair, not just the game's tab.
+  Live analysis (including an engine running alongside), the eval bar and graph, arrows, the
+  opening explorer and full-game analysis are off in every tab, and so is every way of getting the
+  position out: Copy FEN, Export PGN and the database's **Board position** button. Other tabs say
+  where the game is and take you back to it. Everything returns as soon as the game ends.
 - The game is an ordinary tab: its result and time control go into the PGN headers, and when it
   ends everything is there to analyse it.
 
