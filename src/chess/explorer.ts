@@ -1,9 +1,11 @@
-// Frontend side of the opening explorer in `src-tauri/src/explorer.rs`.
+// Frontend side of the opening explorer in `src-tauri/src/explorer.rs`, and of its "My games"
+// source, the local game database (`src-tauri/src/database.rs`).
 
 import { invoke } from "@tauri-apps/api/core";
 import { type Accessor, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { databaseVersion, exploreDatabase } from "./database";
 
-export type ExplorerSource = "masters" | "lichess";
+export type ExplorerSource = "masters" | "lichess" | "mine";
 
 export type ResultCounts = { white: number; draws: number; black: number };
 
@@ -35,6 +37,8 @@ export type ExplorerState =
 
 /** Wait this long after the position changes, so stepping through a game doesn't flood Lichess. */
 const DEBOUNCE_MS = 250;
+/** The local database answers quickly, so it waits less. */
+const LOCAL_DEBOUNCE_MS = 80;
 const CACHE_SIZE = 500;
 
 /** Results by source and position, shared by every tab for the whole session. */
@@ -93,8 +97,11 @@ export function createExplorer(options: {
       setState({ status: "off" });
       return;
     }
+    const local = source === "mine";
+    if (local) databaseVersion();
     const key = `${source}:${positionKey(fen)}`;
-    const cached = cache.get(key);
+    // The local database changes with every import, so its results are not cached.
+    const cached = local ? undefined : cache.get(key);
     if (cached) {
       setState({ status: "ready", result: cached });
       return;
@@ -108,18 +115,24 @@ export function createExplorer(options: {
           ? shown.previous
           : undefined;
     setState({ status: "loading", previous });
-    const timer = setTimeout(() => {
-      invoke<ExplorerResult>("explorer_moves", { source, fen })
-        .then((result) => {
-          remember(key, result);
-          if (current === request) setState({ status: "ready", result });
-        })
-        .catch((reason: unknown) => {
-          const error = asExplorerError(reason);
-          if (error.kind === "signedOut") options.onSignedOut();
-          if (current === request) setState({ status: "error", error });
-        });
-    }, DEBOUNCE_MS);
+    const timer = setTimeout(
+      () => {
+        const fetched = local
+          ? exploreDatabase(fen)
+          : invoke<ExplorerResult>("explorer_moves", { source, fen });
+        fetched
+          .then((result) => {
+            if (!local) remember(key, result);
+            if (current === request) setState({ status: "ready", result });
+          })
+          .catch((reason: unknown) => {
+            const error = asExplorerError(reason);
+            if (error.kind === "signedOut") options.onSignedOut();
+            if (current === request) setState({ status: "error", error });
+          });
+      },
+      local ? LOCAL_DEBOUNCE_MS : DEBOUNCE_MS,
+    );
     onCleanup(() => clearTimeout(timer));
   });
 

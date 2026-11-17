@@ -175,6 +175,58 @@ export const TrashIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const FileIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5z" />
+    <path d="M13.5 3.5V8H18" />
+  </Stroke>
+);
+
+export const UpIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </Stroke>
+);
+
+export const ClockIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 7.5V12l3 2" />
+  </Stroke>
+);
+
+export const BulbIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M9 17.5h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" />
+  </Stroke>
+);
+
+export const FlameIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 21a6 6 0 0 0 6-6c0-3.5-2.5-5.5-3.5-8.5-1.5 1.5-2 3-2 4.5-1-1-1.5-2.5-1.5-4C8 9 6 11.5 6 15a6 6 0 0 0 6 6z" />
+  </Stroke>
+);
+
+export const ExternalIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+  </Stroke>
+);
+
+export const DownloadIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5" />
+    <path d="M5 15v2a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-2" />
+  </Stroke>
+);
+
+export const RetryIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9" />
+    <path d="M4.5 4.5V9H9" />
+  </Stroke>
+);
+
 /** Rounded cat head used for the logo and the coach avatar. */
 export function CatIcon(props: IconProps & { filled?: boolean }) {
   return (

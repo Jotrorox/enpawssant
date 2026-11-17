@@ -1,4 +1,4 @@
-import { For, type JSX, splitProps } from "solid-js";
+import { For, type JSX, Show, splitProps } from "solid-js";
 
 /** Class names for a main action button and a secondary one. */
 export const PRIMARY_BUTTON =
@@ -90,9 +90,90 @@ export function IconButton(
 export function EmptyState(props: { children: JSX.Element; class?: string }) {
   return (
     <div
-      class={`grid place-items-center rounded-2xl border border-dashed border-blush-300 px-4 py-6 text-center text-[13px] text-muted ${props.class ?? ""}`}
+      class={`grid place-content-center place-items-center rounded-2xl border border-dashed border-blush-300 px-4 py-6 text-center text-[13px] text-muted ${props.class ?? ""}`}
     >
       {props.children}
     </div>
   );
 }
+
+/** The title row of a side-rail section. */
+export function ViewHeader(props: {
+  title: string;
+  subtitle?: JSX.Element;
+  children?: JSX.Element;
+}) {
+  return (
+    <header class="flex min-h-10 shrink-0 items-center gap-3">
+      <div class="min-w-0">
+        <h1 class="font-display text-[20px] leading-tight font-semibold text-ink">{props.title}</h1>
+        <Show when={props.subtitle}>
+          <p class="truncate text-[13px] text-muted">{props.subtitle}</p>
+        </Show>
+      </div>
+      <div class="ml-auto flex shrink-0 items-center gap-2">{props.children}</div>
+    </header>
+  );
+}
+
+/** A thin progress bar; without a `fraction` it shows activity of unknown length. */
+export function ProgressBar(props: { fraction?: number; label: string; class?: string }) {
+  return (
+    <div
+      role="progressbar"
+      aria-label={props.label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={props.fraction === undefined ? undefined : Math.round(props.fraction * 100)}
+      class={`h-2 overflow-hidden rounded-full bg-blush-100 ring-1 ring-blush-200 ${props.class ?? ""}`}
+    >
+      <div
+        class={`h-full rounded-full bg-rose transition-[width] duration-300 ${
+          props.fraction === undefined ? "w-1/3 animate-pulse" : ""
+        }`}
+        style={
+          props.fraction === undefined
+            ? undefined
+            : { width: `${Math.min(100, Math.max(0, props.fraction * 100))}%` }
+        }
+      />
+    </div>
+  );
+}
+
+export type Toast = { id: number; message: string; tone: "info" | "error" };
+
+/** Short messages in the corner, e.g. after an import. */
+export function Toasts(props: { toasts: Toast[]; onDismiss: (id: number) => void }) {
+  return (
+    <div
+      aria-live="polite"
+      class="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(380px,calc(100vw-32px))] flex-col gap-2"
+    >
+      <For each={props.toasts}>
+        {(toast) => (
+          <div
+            role={toast.tone === "error" ? "alert" : "status"}
+            class={`pointer-events-auto flex items-start gap-2 rounded-2xl border bg-white px-4 py-3 text-[13px] font-semibold shadow-card ${
+              toast.tone === "error" ? "border-error/30 text-error" : "border-blush-200 text-ink"
+            }`}
+          >
+            <span class="min-w-0 flex-1">{toast.message}</span>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              class="-mr-1 shrink-0 rounded-md px-1 text-ink/50 hover:text-ink"
+              onClick={() => props.onDismiss(toast.id)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** Class names for text inputs and selects. */
+export const INPUT =
+  "h-9 min-w-0 rounded-xl border border-blush-200 bg-white px-3 text-[14px] font-semibold text-ink outline-none placeholder:font-normal placeholder:text-ink/45 focus:border-rose disabled:opacity-50";

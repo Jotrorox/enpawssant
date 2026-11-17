@@ -648,14 +648,30 @@ function Shapes(props: { arrows: Arrow[]; shapes: Shape[]; drawing?: Shape; orie
     >
       <For each={props.arrows}>
         {(arrow) => (
-          <ArrowShape
-            from={arrow.from}
-            to={arrow.to}
-            strength={arrow.strength}
-            color="var(--color-rose)"
-            opacity={0.35 + 0.5 * arrow.strength}
-            orientation={props.orientation}
-          />
+          // An arrow that starts and ends on the same square marks that square, e.g. as a hint.
+          <Show
+            when={arrow.from !== arrow.to}
+            fallback={
+              <circle
+                cx={squareToCell(arrow.from, props.orientation)[0] + 0.5}
+                cy={squareToCell(arrow.from, props.orientation)[1] + 0.5}
+                r={0.45}
+                fill="none"
+                stroke="var(--color-rose)"
+                stroke-width={0.08}
+                opacity={0.35 + 0.5 * arrow.strength}
+              />
+            }
+          >
+            <ArrowShape
+              from={arrow.from}
+              to={arrow.to}
+              strength={arrow.strength}
+              color="var(--color-rose)"
+              opacity={0.35 + 0.5 * arrow.strength}
+              orientation={props.orientation}
+            />
+          </Show>
         )}
       </For>
       <For each={props.shapes}>

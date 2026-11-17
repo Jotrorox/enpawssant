@@ -11,6 +11,8 @@ type TitleBarProps = {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** Called when a search is submitted with Enter. */
+  onSearch: (query: string) => void;
 };
 
 export function TitleBar(props: TitleBarProps) {
@@ -93,6 +95,16 @@ export function TitleBar(props: TitleBarProps) {
           type="search"
           placeholder="Search games, players, FEN…"
           aria-label="Search games, players, FEN"
+          enterkeyhint="search"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              props.onSearch(event.currentTarget.value.trim());
+            } else if (event.key === "Escape") {
+              event.currentTarget.value = "";
+              event.currentTarget.blur();
+            }
+          }}
           class="min-w-0 flex-1 bg-transparent font-semibold text-ink outline-none placeholder:text-ink/80"
         />
         <kbd class="shrink-0 font-body text-[11px] font-bold text-ink/60">

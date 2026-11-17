@@ -1,8 +1,6 @@
 //! Tauri commands for PGN import and export. Parsing and writing live in `chess-core`; this module
 //! only adds native file dialogs, so the frontend needs no dialog or file system permissions.
 
-use std::fs::File;
-use std::io::BufReader;
 use std::path::PathBuf;
 
 use chess_core::pgn::{self, Game, ParsedPgn};
@@ -11,16 +9,20 @@ use tauri::{AppHandle, Runtime};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tokio::sync::oneshot;
 
+use crate::files::{file_name, read_pgn_file};
+
 /// More games than this are not read from one file; the result is marked as truncated.
-const MAX_GAMES: usize = 1000;
+pub const MAX_GAMES: usize = 1000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedPgn {
     /// File name of the opened file, without its directory.
-    name: String,
+    pub name: String,
+    /// Full path, so the file can be opened again from the recent files.
+    pub path: PathBuf,
     #[serde(flatten)]
-    parsed: ParsedPgn,
+    pub parsed: ParsedPgn,
 }
 
 /// Reads games from PGN text, e.g. pasted from the clipboard.
@@ -50,15 +52,9 @@ pub async fn pgn_open_file<R: Runtime>(app: AppHandle<R>) -> Result<Option<Opene
         return Ok(None);
     };
 
-    let name = file_name(&path);
-    tauri::async_runtime::spawn_blocking(move || {
-        let file = File::open(&path).map_err(|e| format!("could not open {name}: {e}"))?;
-        let parsed = pgn::parse(BufReader::new(file), MAX_GAMES)
-            .map_err(|e| format!("could not read {name}: {e}"))?;
-        Ok(Some(OpenedPgn { name, parsed }))
-    })
-    .await
-    .map_err(|e| format!("reading the file failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || read_pgn_file(path).map(Some))
+        .await
+        .map_err(|e| format!("reading the file failed: {e}"))?
 }
 
 /// Asks where to save a game and writes it as PGN. Returns the file name, or `None` when the
@@ -101,10 +97,4 @@ async fn chosen_path(rx: oneshot::Receiver<Option<FilePath>>) -> Result<Option<P
                 .map_err(|e| format!("unsupported file location: {e}"))
         })
         .transpose()
-}
-
-fn file_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
 }

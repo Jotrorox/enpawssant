@@ -10,6 +10,7 @@ import {
   ChartIcon,
   CheckIcon,
   CopyIcon,
+  DatabaseIcon,
   ExportIcon,
   FirstIcon,
   FlipIcon,
@@ -39,6 +40,7 @@ type BoardPanelProps = {
   onMove: (move: MoveInput) => void;
   onImport: () => void;
   onExport: () => void;
+  onSaveToDatabase: () => void;
   /** Progress of the running full-game analysis, if one is running. */
   review?: ReviewProgress;
   reviewError?: string;
@@ -75,6 +77,7 @@ export function BoardPanel(props: BoardPanelProps) {
         onPly={props.onPly}
         onImport={props.onImport}
         onExport={props.onExport}
+        onSaveToDatabase={props.onSaveToDatabase}
         review={props.review}
         onReview={props.onReview}
         onCancelReview={props.onCancelReview}
@@ -161,6 +164,7 @@ function BoardToolbar(props: {
   onPly: (ply: number) => void;
   onImport: () => void;
   onExport: () => void;
+  onSaveToDatabase: () => void;
   review?: ReviewProgress;
   onReview: () => void;
   onCancelReview: () => void;
@@ -197,6 +201,9 @@ function BoardToolbar(props: {
       </IconButton>
       <IconButton label="Export PGN" onClick={() => props.onExport()}>
         <ExportIcon />
+      </IconButton>
+      <IconButton label="Save to the game database" onClick={() => props.onSaveToDatabase()}>
+        <DatabaseIcon />
       </IconButton>
       <IconButton
         label={soundEnabled() ? "Mute move sounds" : "Unmute move sounds"}

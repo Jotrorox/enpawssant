@@ -1,9 +1,10 @@
-//! Stockfish sidecar handling. Only Rust spawns the engine; the frontend has
-//! no shell permissions.
+//! UCI engine sessions: the bundled Stockfish sidecar and engines the user
+//! added (see `engines.rs`). Only Rust spawns engines; the frontend has no
+//! shell permissions.
 //!
-//! The engine runs as one long-lived session, started on first use. A task
-//! (the [`Actor`]) owns the process and receives `analyze`/`stop` commands
-//! through a channel. Each `analyze` comes with its own Tauri channel, and the
+//! Every engine runs as one long-lived session, started on first use, and
+//! several engines can run side by side. A task (the [`Actor`]) owns each
+//! process and receives `analyze`/`stop` commands through a channel. Each `analyze` comes with its own Tauri channel, and the
 //! actor streams throttled snapshots of that search to it with every line in
 //! SAN and every score from White's point of view.
 //!
@@ -16,20 +17,24 @@
 //! those lines and only then starts the next search. Requests that arrive in
 //! the meantime replace each other, so only the latest position gets searched.
 
+use std::collections::{BTreeMap, HashMap};
 use std::mem;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chess_core::shakmaty::KnownOutcome;
-use chess_core::uci::{self, Info, Score};
+use chess_core::uci::{self, Info, OptionKind, Score, UciOption};
 use chess_core::{AnalysisRoot, LineMove};
 use serde::Serialize;
 use tauri::async_runtime::{self, Receiver};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::process::{Command as ShellCommand, CommandChild, CommandEvent};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{MissedTickBehavior, timeout};
+
+use crate::engines::{Engines, MANAGED_OPTIONS};
 
 /// Must match the file name of the `externalBin` entry in `tauri.conf.json`.
 const SIDECAR: &str = "stockfish";
@@ -43,13 +48,36 @@ const HASH_MB: u32 = 256;
 const MAX_MULTIPV: u32 = 5;
 const MAX_DEPTH: u32 = 99;
 
-/// What the frontend shows about the running engine.
+/// What the frontend shows about a running engine.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineInfo {
     name: String,
-    threads: u32,
-    hash_mb: u32,
+    /// The `Threads` and `Hash` settings, for engines that have them.
+    threads: Option<u32>,
+    hash_mb: Option<u32>,
+}
+
+/// What an engine says about itself when it starts.
+#[derive(Clone, Debug)]
+pub struct Handshake {
+    pub name: String,
+    pub author: Option<String>,
+    pub options: Vec<UciOption>,
+}
+
+/// The program behind an engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Program {
+    Bundled,
+    Path(PathBuf),
+}
+
+/// How to start an engine: its program and the option values the user chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchSpec {
+    pub program: Program,
+    pub values: BTreeMap<String, String>,
 }
 
 /// A message on the channel of an `analyze` request.
@@ -116,15 +144,17 @@ impl From<Score> for WireScore {
     }
 }
 
-/// Tauri state holding the engine session, if one is running.
+/// Tauri state holding the running engine sessions, by engine ID.
 #[derive(Default)]
 pub struct Engine {
-    session: Mutex<Option<Session>>,
+    sessions: Mutex<HashMap<String, Session>>,
 }
 
 struct Session {
     commands: mpsc::UnboundedSender<Command>,
     info: EngineInfo,
+    /// What the session was started with; a changed setup starts a new one.
+    spec: LaunchSpec,
 }
 
 enum Command {
@@ -150,17 +180,28 @@ impl Request {
 }
 
 impl Engine {
-    /// Starts the engine if needed and describes it.
-    pub async fn info<R: Runtime>(&self, app: &AppHandle<R>) -> Result<EngineInfo, String> {
-        let mut session = self.session.lock().await;
-        Ok(ensure_session(&mut session, app).await?.info.clone())
+    /// Starts the engine `id` if needed and describes it.
+    pub async fn info<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        engines: &Engines,
+        id: &str,
+    ) -> Result<EngineInfo, String> {
+        let mut sessions = self.sessions.lock().await;
+        Ok(ensure_session(&mut sessions, app, engines, id)
+            .await?
+            .info
+            .clone())
     }
 
-    /// Searches `fen` to `depth`, or until told otherwise without one,
-    /// replacing the current search.
+    /// Searches `fen` with engine `id` to `depth`, or until told otherwise
+    /// without one, replacing that engine's current search.
+    #[allow(clippy::too_many_arguments)]
     pub async fn analyze<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        engines: &Engines,
+        id: &str,
         fen: String,
         multipv: u32,
         depth: Option<u32>,
@@ -174,17 +215,17 @@ impl Engine {
             depth: depth.map(|d| d.clamp(1, MAX_DEPTH)),
             channel,
         });
-        let mut session = self.session.lock().await;
+        let mut sessions = self.sessions.lock().await;
         // A second attempt covers an engine that died since the last request.
         for _ in 0..2 {
-            match ensure_session(&mut session, app)
+            match ensure_session(&mut sessions, app, engines, id)
                 .await?
                 .commands
                 .send(command)
             {
                 Ok(()) => return Ok(()),
                 Err(mpsc::error::SendError(returned)) => {
-                    *session = None;
+                    sessions.remove(id);
                     command = returned;
                 }
             }
@@ -192,88 +233,199 @@ impl Engine {
         Err("the engine stopped unexpectedly".into())
     }
 
-    /// Stops the current search. Does not start the engine.
-    pub async fn stop(&self) {
-        if let Some(session) = self.session.lock().await.as_ref() {
+    /// Stops the current search of engine `id`. Does not start the engine.
+    pub async fn stop(&self, id: &str) {
+        if let Some(session) = self.sessions.lock().await.get(id) {
             let _ = session.commands.send(Command::Stop);
         }
     }
 
-    /// Asks the engine to quit and waits briefly for it.
+    /// Quits engine `id`, so that it starts afresh with its current setup when next used.
+    pub async fn restart(&self, id: &str) {
+        let session = self.sessions.lock().await.remove(id);
+        if let Some(session) = session {
+            quit(session).await;
+        }
+    }
+
+    /// Asks every engine to quit and waits briefly for them.
     pub async fn shutdown(&self) {
-        let Some(session) = self.session.lock().await.take() else {
-            return;
-        };
-        let (done, exited) = oneshot::channel();
-        if session.commands.send(Command::Quit(done)).is_ok() {
-            let _ = timeout(QUIT_TIMEOUT * 2, exited).await;
+        let sessions: Vec<Session> = self.sessions.lock().await.drain().map(|(_, s)| s).collect();
+        for session in sessions {
+            quit(session).await;
         }
     }
 }
 
-/// Returns the running session, spawning the engine if there is none or the
-/// last one died.
-async fn ensure_session<'a, R: Runtime>(
-    slot: &'a mut Option<Session>,
-    app: &AppHandle<R>,
-) -> Result<&'a Session, String> {
-    if slot.as_ref().is_some_and(|s| s.commands.is_closed()) {
-        *slot = None;
+async fn quit(session: Session) {
+    let (done, exited) = oneshot::channel();
+    if session.commands.send(Command::Quit(done)).is_ok() {
+        let _ = timeout(QUIT_TIMEOUT * 2, exited).await;
     }
-    if slot.is_none() {
-        *slot = Some(spawn_session(app).await?);
-    }
-    Ok(slot.as_ref().expect("session was just set"))
 }
 
-async fn spawn_session<R: Runtime>(app: &AppHandle<R>) -> Result<Session, String> {
-    let (mut events, mut child) = app
-        .shell()
-        .sidecar(SIDECAR)
-        .map_err(|e| format!("could not locate the engine: {e}"))?
+/// Returns the running session of engine `id`, spawning the engine if there is
+/// none, the last one died or its setup changed since it started.
+async fn ensure_session<'a, R: Runtime>(
+    sessions: &'a mut HashMap<String, Session>,
+    app: &AppHandle<R>,
+    engines: &Engines,
+    id: &str,
+) -> Result<&'a Session, String> {
+    let entry = engines.entry(app, id)?;
+    let spec = entry.launch_spec();
+    let stale = sessions
+        .get(id)
+        .is_some_and(|s| s.commands.is_closed() || s.spec != spec);
+    if stale && let Some(old) = sessions.remove(id) {
+        quit(old).await;
+    }
+    if !sessions.contains_key(id) {
+        let (session, handshake) = spawn_session(app, spec).await?;
+        engines.discovered(app, id, &handshake);
+        sessions.insert(id.to_owned(), session);
+    }
+    Ok(sessions.get(id).expect("session was just set"))
+}
+
+fn command<R: Runtime>(app: &AppHandle<R>, program: &Program) -> Result<ShellCommand, String> {
+    match program {
+        Program::Bundled => app
+            .shell()
+            .sidecar(SIDECAR)
+            .map_err(|e| format!("could not locate the engine: {e}")),
+        Program::Path(path) => {
+            if !path.is_file() {
+                return Err(format!("{} no longer exists", path.display()));
+            }
+            let mut command = app.shell().command(path);
+            // Engines look for their networks and books next to themselves.
+            if let Some(dir) = path.parent() {
+                command = command.current_dir(dir);
+            }
+            Ok(command)
+        }
+    }
+}
+
+/// Reads the engine's `uci` answer: its name, author and options.
+async fn handshake(
+    events: &mut Receiver<CommandEvent>,
+    child: &mut CommandChild,
+) -> Result<Handshake, String> {
+    send(child, "uci")?;
+    let mut name = None;
+    let mut author = None;
+    let mut options = Vec::new();
+    loop {
+        let line = next_line(events).await?;
+        if let Some(value) = uci::parse_id_name(&line) {
+            name = Some(value.to_owned());
+        } else if let Some(value) = uci::parse_id_author(&line) {
+            author = Some(value.to_owned());
+        } else if let Some(option) = uci::parse_option(&line) {
+            options.push(option);
+        } else if line == "uciok" {
+            break;
+        }
+    }
+    Ok(Handshake {
+        name: name.ok_or("the engine sent `uciok` without `id name`")?,
+        author,
+        options,
+    })
+}
+
+/// Starts a program, checks that it is a UCI engine and quits it again.
+pub async fn probe<R: Runtime>(app: &AppHandle<R>, program: &Program) -> Result<Handshake, String> {
+    let (mut events, mut child) = command(app, program)?
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("could not start the engine: {e}"))?;
+    let handshake = timeout(HANDSHAKE_TIMEOUT, handshake(&mut events, &mut child))
+        .await
+        .map_err(|_| {
+            "this doesn't look like a UCI engine: it never answered `uci`".to_string()
+        })??;
+    let _ = send(&mut child, "quit");
+    Ok(handshake)
+}
+
+/// The value to set for each option at startup: the user's choice, or for
+/// `Threads` and `Hash` a default that suits analysis better than the engine's.
+fn startup_values(
+    options: &[UciOption],
+    chosen: &BTreeMap<String, String>,
+) -> Vec<(UciOption, String)> {
+    // Leave a core for the UI.
+    let threads =
+        std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1));
+    options
+        .iter()
+        .filter(|option| !MANAGED_OPTIONS.contains(&option.name.as_str()))
+        .filter_map(|option| {
+            let value = match (chosen.get(&option.name), option.name.as_str()) {
+                (Some(value), _) => option.normalize(value).ok()?,
+                (None, "Threads") => option.normalize(&threads.to_string()).ok()?,
+                (None, "Hash") => option.normalize(&HASH_MB.to_string()).ok()?,
+                (None, _) => return None,
+            };
+            Some((option.clone(), value))
+        })
+        .collect()
+}
+
+/// The value an option ends up with: set at startup, or the engine's default.
+fn effective_value(handshake: &Handshake, set: &[(UciOption, String)], name: &str) -> Option<u32> {
+    let option = handshake.options.iter().find(|o| o.name == name)?;
+    if !matches!(option.kind, OptionKind::Spin { .. }) {
+        return None;
+    }
+    set.iter()
+        .find(|(o, _)| o.name == name)
+        .map(|(_, value)| value.clone())
+        .or_else(|| option.default_value())?
+        .parse()
+        .ok()
+}
+
+async fn spawn_session<R: Runtime>(
+    app: &AppHandle<R>,
+    spec: LaunchSpec,
+) -> Result<(Session, Handshake), String> {
+    let (mut events, mut child) = command(app, &spec.program)?
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("could not start the engine: {e}"))?;
 
-    // Leave a core for the UI.
-    let threads = std::thread::available_parallelism()
-        .map_or(1, |n| n.get().saturating_sub(1).max(1))
-        .try_into()
-        .unwrap_or(1);
-
-    let name = timeout(HANDSHAKE_TIMEOUT, async {
-        send(&mut child, "uci")?;
-        let mut name = None;
-        loop {
-            let line = next_line(&mut events).await?;
-            if let Some(value) = uci::parse_id_name(&line) {
-                name = Some(value.to_owned());
-            } else if line == "uciok" {
-                break;
-            }
+    let (handshake, set) = timeout(HANDSHAKE_TIMEOUT, async {
+        let handshake = handshake(&mut events, &mut child).await?;
+        let set = startup_values(&handshake.options, &spec.values);
+        for (option, value) in &set {
+            send(&mut child, &option.set_command(value))?;
         }
-        send(
-            &mut child,
-            &format!("setoption name Threads value {threads}"),
-        )?;
-        send(&mut child, &format!("setoption name Hash value {HASH_MB}"))?;
         send(&mut child, "isready")?;
         while next_line(&mut events).await? != "readyok" {}
-        name.ok_or_else(|| "the engine sent `uciok` without `id name`".to_string())
+        Ok::<_, String>((handshake, set))
     })
     .await
     .map_err(|_| "the engine did not get ready in time".to_string())??;
 
+    let info = EngineInfo {
+        name: handshake.name.clone(),
+        threads: effective_value(&handshake, &set, "Threads"),
+        hash_mb: effective_value(&handshake, &set, "Hash"),
+    };
     let (commands, receiver) = mpsc::unbounded_channel();
     async_runtime::spawn(Actor::new(child, events).run(receiver));
-    Ok(Session {
-        commands,
-        info: EngineInfo {
-            name,
-            threads,
-            hash_mb: HASH_MB,
+    Ok((
+        Session {
+            commands,
+            info,
+            spec,
         },
-    })
+        handshake,
+    ))
 }
 
 fn send(child: &mut CommandChild, command: &str) -> Result<(), String> {
@@ -448,7 +600,12 @@ impl<I: EngineInput> Actor<I> {
         let outcome: Result<Option<oneshot::Sender<()>>, String> = loop {
             let step = tokio::select! {
                 command = commands.recv() => match command {
-                    Some(Command::Quit(done)) => break Ok(Some(done)),
+                    Some(Command::Quit(done)) => {
+                        if let State::Searching(search) = &self.state {
+                            search.request.send_done(false);
+                        }
+                        break Ok(Some(done));
+                    }
                     // The app dropped its state: shut down quietly.
                     None => break Ok(None),
                     Some(command) => self.handle(command),

@@ -33,3 +33,7 @@ getrandom = "0.3"
 open = "5"
 sha2 = "0.10"
 url = "2"
+# SQLite is compiled from source with the C compiler Tauri already needs, so no system library is required.
+rusqlite = { version = "0.42", features = ["bundled", "fallible_uint"] }
+# Pure Rust, for the zstd-compressed Lichess puzzle database.
+ruzstd = "0.9"

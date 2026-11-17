@@ -106,21 +106,39 @@ pub struct ParsedPgn {
 
 /// Reads up to `max_games` games from PGN text.
 pub fn parse(reader: impl Read, max_games: usize) -> std::io::Result<ParsedPgn> {
-    let mut reader = Reader::new(reader);
-    let mut builder = GameBuilder { index: 0 };
     let mut parsed = ParsedPgn::default();
-    while let Some(result) = reader.read_game(&mut builder)? {
+    let more = read_games(reader, |result| {
+        if parsed.games.len() + parsed.errors.len() >= max_games {
+            return ControlFlow::Break(());
+        }
         match result {
-            Ok(game) if game.game.headers.is_empty() && game.game.moves.is_empty() => {}
             Ok(game) => parsed.games.push(game),
             Err(error) => parsed.errors.push(error),
         }
-        if parsed.games.len() + parsed.errors.len() >= max_games {
-            parsed.truncated = reader.has_more()?;
-            break;
+        ControlFlow::Continue(())
+    })?;
+    parsed.truncated = more;
+    Ok(parsed)
+}
+
+/// Reads games one at a time and hands each to `each`, without keeping them, so files of any size
+/// can be read. Empty games are skipped. Returns whether `each` stopped reading before the end.
+pub fn read_games(
+    reader: impl Read,
+    mut each: impl FnMut(Result<ImportedGame, String>) -> ControlFlow<()>,
+) -> std::io::Result<bool> {
+    let mut reader = Reader::new(reader);
+    let mut builder = GameBuilder { index: 0 };
+    while let Some(result) = reader.read_game(&mut builder)? {
+        if matches!(&result, Ok(game) if game.game.headers.is_empty() && game.game.moves.is_empty())
+        {
+            continue;
+        }
+        if each(result).is_break() {
+            return Ok(true);
         }
     }
-    Ok(parsed)
+    Ok(false)
 }
 
 /// Reads up to `max_games` games from a PGN string.
