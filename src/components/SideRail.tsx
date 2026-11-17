@@ -1,4 +1,6 @@
 import { For, type JSX, Show } from "solid-js";
+import { toggleTheme } from "../appearance";
+import { resolvedTheme } from "../settings";
 import {
   BoardIcon,
   ChessClockIcon,
@@ -6,7 +8,9 @@ import {
   EngineIcon,
   FolderIcon,
   GearIcon,
+  MoonIcon,
   PuzzleIcon,
+  SunIcon,
 } from "./Icons";
 
 export type Section = "board" | "play" | "database" | "engines" | "puzzles" | "files";
@@ -44,7 +48,7 @@ export function SideRail(props: {
             onClick={() => props.onSelect(section.id)}
             class={`relative grid size-[44px] place-items-center rounded-2xl transition-colors ${
               active() === section.id
-                ? "bg-white text-rose shadow-[0_2px_8px_rgb(224_112_143/0.25)]"
+                ? "bg-raised text-rose shadow-[0_2px_8px_rgb(224_112_143/0.25)]"
                 : "text-ink/80 hover:bg-blush-100 hover:text-ink"
             }`}
           >
@@ -59,15 +63,40 @@ export function SideRail(props: {
           </button>
         )}
       </For>
+      <ThemeToggle />
       <button
         type="button"
         title="Settings"
         aria-label="Settings"
         onClick={() => props.onSettings()}
-        class="mt-auto grid size-[44px] place-items-center rounded-2xl text-ink/80 hover:bg-blush-100 hover:text-ink"
+        class="grid size-[44px] place-items-center rounded-2xl text-ink/80 hover:bg-blush-100 hover:text-ink"
       >
         <GearIcon class="size-[22px]" />
       </button>
     </nav>
+  );
+}
+
+/** Flips between the light and dark theme; the moon shows by day and the sun by night. */
+function ThemeToggle() {
+  const dark = () => resolvedTheme() === "dark";
+  const label = () => (dark() ? "Switch to light theme" : "Switch to dark theme");
+  const icon = "theme-toggle-icon absolute size-[22px]";
+
+  return (
+    <button
+      type="button"
+      title={label()}
+      aria-label={label()}
+      onClick={(event) => toggleTheme(event.currentTarget)}
+      class="relative mt-auto grid size-[44px] place-items-center overflow-hidden rounded-2xl text-ink/80 transition-colors hover:bg-blush-100 hover:text-ink dark:text-cream/90 dark:hover:text-cream"
+    >
+      <MoonIcon
+        class={`${icon} ${dark() ? "translate-y-6 -rotate-90 opacity-0" : "rotate-0 opacity-100"}`}
+      />
+      <SunIcon
+        class={`${icon} ${dark() ? "rotate-0 opacity-100" : "-translate-y-6 rotate-90 opacity-0"}`}
+      />
+    </button>
   );
 }

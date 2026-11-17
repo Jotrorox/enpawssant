@@ -60,6 +60,13 @@ export const SunIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const MoonIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M19.5 14.6A7.5 7.5 0 0 1 9.4 4.5a7.5 7.5 0 1 0 10.1 10.1z" />
+    <path d="M16.5 3.5v3M15 5h3" />
+  </Stroke>
+);
+
 export const SearchIcon = (p: IconProps) => (
   <Stroke {...p}>
     <circle cx="11" cy="11" r="6" />

@@ -56,7 +56,7 @@ export function Segmented<T extends string>(props: SegmentedProps<T>) {
                   : "rounded-xl px-3 py-1.5 text-[14px]"
               } ${
                 selected()
-                  ? "bg-white font-bold text-ink shadow-[0_1px_3px_rgb(74_50_71/0.12)]"
+                  ? "bg-raised font-bold text-ink shadow-[0_1px_3px_rgb(74_50_71/0.12)] dark:shadow-[0_1px_3px_rgb(0_0_0/0.35)]"
                   : "font-semibold text-ink/75 hover:text-ink"
               }`}
             >
@@ -91,7 +91,7 @@ export function IconButton(
 export function EmptyState(props: { children: JSX.Element; class?: string }) {
   return (
     <div
-      class={`grid place-content-center place-items-center rounded-2xl border border-dashed border-blush-300 px-4 py-6 text-center text-[13px] text-muted ${props.class ?? ""}`}
+      class={`grid place-content-center place-items-center rounded-2xl border border-dashed border-blush-300 px-4 dark:border-rose/25 py-6 text-center text-[13px] text-muted ${props.class ?? ""}`}
     >
       {props.children}
     </div>
@@ -203,7 +203,7 @@ export function Modal(props: {
       // Clicks on the backdrop land on the dialog element itself.
       onClick={(event) => event.target === dialog && dialog.close()}
       style={{ width: `min(${props.width ?? 640}px, calc(100vw - 32px))` }}
-      class="m-auto rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30"
+      class="m-auto rounded-[20px] border border-blush-200 bg-blush-50 text-ink shadow-card backdrop:bg-plum/30 dark:backdrop:bg-black/55"
     >
       <div class="flex max-h-[calc(100vh-64px)] flex-col gap-3 p-5">
         <div class="flex items-center">

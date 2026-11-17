@@ -408,7 +408,7 @@ export function Board(props: BoardProps) {
   };
 
   return (
-    <div class="relative pt-[30px]">
+    <div class="board-surface relative pt-[30px]">
       <CatEars />
       <div class="relative rounded-[28px] bg-(--board-frame) p-[11px] shadow-[0_10px_30px_-12px_rgb(224_112_143/0.45)]">
         {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-driven board; moves are also reachable from the notation and toolbar. */}
