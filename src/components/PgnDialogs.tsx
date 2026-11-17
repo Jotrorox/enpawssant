@@ -1,5 +1,7 @@
-import { createEffect, createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, Match, Show, Switch } from "solid-js";
+import { addGames, databaseChanged } from "../chess/database";
 import { rememberFile } from "../chess/files";
+import { type OnlineSite, SITE_NAMES } from "../chess/online";
 import {
   exportPgn,
   header,
@@ -13,56 +15,92 @@ import {
 } from "../chess/pgn";
 import { checkPosition, looksLikeFen } from "../chess/setup";
 import { type GameSession, gameTitle } from "../game/session";
-import { CheckIcon, CopyIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
-import { EmptyState, Modal, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./ui";
+import { CheckIcon, CopyIcon, DatabaseIcon, ExportIcon, FolderIcon, ImportIcon } from "./Icons";
+import { type FetchedGames, OnlineImport } from "./OnlineImport";
+import { EmptyState, Modal, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
 
 /** Rejections from Tauri commands are plain strings; anything else is an unexpected error. */
 const errorMessage = (error: unknown) => (typeof error === "string" ? error : String(error));
+
+export type ImportSource = "pgn" | OnlineSite;
+
+const SOURCES = [
+  { value: "pgn", label: "PGN" },
+  { value: "lichess", label: "Lichess" },
+  { value: "chesscom", label: "Chess.com" },
+] as const;
 
 type ImportDialogProps = {
   open: boolean;
   /** Games already read, e.g. from a dropped file: the dialog starts with the game picker. */
   preset?: ParsedPgn & { name?: string };
+  /** The tab to start on; PGN unless given. */
+  source?: ImportSource;
   onClose: () => void;
-  /** Opens the chosen games, e.g. in new tabs. */
-  onOpen: (games: ImportedGame[]) => void;
+  /**
+   * Opens the chosen games, e.g. in new tabs. `player` is whose games they are, when they were
+   * fetched from a site, so the board can face their way.
+   */
+  onOpen: (games: ImportedGame[], player?: string) => void;
   /** Opens a pasted FEN, already checked, on a new board. */
   onOpenPosition: (fen: string) => void;
 };
+
+/** Games to pick from, and where they came from. */
+type Picked = ParsedPgn & { name?: string; fetched?: FetchedGames };
 
 /** More games than this can't be opened all at once, to keep the tab bar usable. */
 const MAX_OPEN_ALL = 12;
 
 export function ImportDialog(props: ImportDialogProps) {
+  return (
+    <Modal open={props.open} title="Import games" onClose={props.onClose}>
+      {/* Mounted afresh every time the dialog opens. */}
+      <Show when={props.open}>
+        <ImportContent {...props} />
+      </Show>
+    </Modal>
+  );
+}
+
+function ImportContent(props: ImportDialogProps) {
+  const [source, setSource] = createSignal<ImportSource>(props.source ?? "pgn");
   const [text, setText] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
-  const [result, setResult] = createSignal<ParsedPgn & { name?: string }>();
-
-  // Start fresh every time the dialog opens.
-  createEffect(() => {
-    if (!props.open) return;
-    setText("");
-    setError(undefined);
-    setResult(props.preset);
-  });
+  const [result, setResult] = createSignal<Picked | undefined>(props.preset);
 
   const open = (games: ImportedGame[]) => {
-    props.onOpen(games);
+    props.onOpen(games, result()?.fetched?.username);
     props.onClose();
   };
+
+  const isSimple = (parsed: ParsedPgn) =>
+    parsed.games.length === 1 &&
+    parsed.errors.length === 0 &&
+    parsed.games[0].warnings.length === 0;
 
   const handle = (parsed: ParsedPgn & { name?: string }) => {
     if (parsed.games.length === 0) {
       setError(parsed.errors[0] ?? "No games found. Is this a PGN?");
-      return;
+    } else if (isSimple(parsed)) {
+      open(parsed.games);
+    } else {
+      setResult(parsed);
     }
-    const [only] = parsed.games;
-    if (parsed.games.length === 1 && parsed.errors.length === 0 && only.warnings.length === 0) {
-      open([only]);
-      return;
+  };
+
+  const handleFetched = (fetched: FetchedGames) => {
+    if (isSimple(fetched)) {
+      props.onOpen(fetched.games, fetched.username);
+      props.onClose();
+    } else {
+      setResult({
+        ...fetched,
+        name: `${fetched.username} on ${SITE_NAMES[fetched.site]}`,
+        fetched,
+      });
     }
-    setResult(parsed);
   };
 
   const run = async (read: () => Promise<(ParsedPgn & { name?: string }) | null>) => {
@@ -79,11 +117,12 @@ export function ImportDialog(props: ImportDialogProps) {
   };
 
   return (
-    <Modal open={props.open} title="Import PGN" onClose={props.onClose}>
-      <Show
-        when={result()}
-        fallback={
-          <>
+    <>
+      {/* Hidden rather than unmounted while picking, so going back keeps what was entered. */}
+      <div class={`flex flex-col gap-3 ${result() ? "hidden" : ""}`}>
+        <Segmented label="Import from" options={SOURCES} value={source()} onChange={setSource} />
+        <Switch>
+          <Match when={source() === "pgn"}>
             <textarea
               value={text()}
               onInput={(event) => setText(event.currentTarget.value)}
@@ -135,25 +174,65 @@ export function ImportDialog(props: ImportDialogProps) {
                 Import
               </button>
             </div>
-          </>
-        }
-      >
-        {(parsed) => <GamePicker parsed={parsed()} onOpen={open} />}
+          </Match>
+          <Match when={source() === "lichess"}>
+            <OnlineImport site="lichess" onFetched={handleFetched} />
+          </Match>
+          <Match when={source() === "chesscom"}>
+            <OnlineImport site="chesscom" onFetched={handleFetched} />
+          </Match>
+        </Switch>
+      </div>
+      <Show when={result()}>
+        {(parsed) => (
+          <GamePicker
+            parsed={parsed()}
+            onOpen={open}
+            onBack={props.preset ? undefined : () => setResult(undefined)}
+            databaseSource={(() => {
+              const fetched = parsed().fetched;
+              return fetched && SITE_NAMES[fetched.site];
+            })()}
+          />
+        )}
       </Show>
-    </Modal>
+    </>
   );
 }
 
 export function GamePicker(props: {
   parsed: ParsedPgn & { name?: string };
   onOpen: (games: ImportedGame[]) => void;
+  /** Shows a button that goes back to choosing what to import. */
+  onBack?: () => void;
+  /** Shows a button that adds every game to the database, with this as their source. */
+  databaseSource?: string;
 }) {
   const count = () => props.parsed.games.length;
+  const [saving, setSaving] = createSignal(false);
+  const [saved, setSaved] = createSignal<{ ok: boolean; message: string }>();
+
+  const addAll = async (source: string) => {
+    setSaving(true);
+    try {
+      const added = await addGames(props.parsed.games, source);
+      databaseChanged();
+      const parts = [`Added ${plural(added.imported, "game")} to the database`];
+      if (added.duplicates > 0) parts.push(`${plural(added.duplicates, "game")} already there`);
+      if (added.failed > 0) parts.push(`${plural(added.failed, "game")} couldn't be saved`);
+      setSaved({ ok: added.imported > 0 || added.failed === 0, message: `${parts.join(", ")}.` });
+    } catch (e) {
+      setSaved({ ok: false, message: `Mochi couldn't save the games: ${errorMessage(e)}` });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <p class="text-[13px] text-muted">
         {props.parsed.name ? `${props.parsed.name}: ` : ""}
-        {count()} {count() === 1 ? "game" : "games"}
+        {plural(count(), "game")}
         {props.parsed.truncated ? " (only the first ones were read)" : ""}
       </p>
       <Show when={props.parsed.errors.length > 0}>
@@ -166,17 +245,61 @@ export function GamePicker(props: {
           {(game) => <GameRow game={game} onOpen={() => props.onOpen([game])} />}
         </For>
       </ul>
-      <Show when={count() > 1 && count() <= MAX_OPEN_ALL}>
-        <button
-          type="button"
-          class={`${PRIMARY_BUTTON} self-end`}
-          onClick={() => props.onOpen(props.parsed.games)}
-        >
-          Open all {count()} games
-        </button>
+      <Show when={saved()}>
+        {(status) => (
+          <p
+            role="status"
+            class={`flex items-center gap-1.5 text-[13px] font-semibold ${
+              status().ok ? "text-nag-good" : "text-error"
+            }`}
+          >
+            <Show when={status().ok}>
+              <CheckIcon class="size-4" />
+            </Show>
+            {status().message}
+          </p>
+        )}
+      </Show>
+      <Show when={props.onBack || props.databaseSource || count() > 1}>
+        <div class="flex items-center gap-2">
+          <Show when={props.onBack}>
+            {(back) => (
+              <button type="button" class={SECONDARY_BUTTON} onClick={() => back()()}>
+                Back
+              </button>
+            )}
+          </Show>
+          <Show when={props.databaseSource}>
+            {(source) => (
+              <button
+                type="button"
+                class={`${SECONDARY_BUTTON} ml-auto`}
+                disabled={saving() || saved()?.ok}
+                onClick={() => void addAll(source())}
+              >
+                <DatabaseIcon class="size-[18px]" />
+                {saving() ? "Adding…" : `Add ${count() === 1 ? "it" : "all"} to the database`}
+              </button>
+            )}
+          </Show>
+          <Show when={count() > 1 && count() <= MAX_OPEN_ALL}>
+            <button
+              type="button"
+              class={`${PRIMARY_BUTTON} ${props.databaseSource ? "" : "ml-auto"}`}
+              onClick={() => props.onOpen(props.parsed.games)}
+            >
+              Open all {count()} games
+            </button>
+          </Show>
+        </div>
       </Show>
     </>
   );
+}
+
+/** `1 game`, `20 games`. */
+function plural(n: number, noun: string): string {
+  return `${n.toLocaleString("en-US")} ${n === 1 ? noun : `${noun}s`}`;
 }
 
 function GameRow(props: { game: ImportedGame; onOpen: () => void }) {

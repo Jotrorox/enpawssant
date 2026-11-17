@@ -2,14 +2,18 @@
 // outlive the tab's view, so switching tabs keeps moves, variations and the current position.
 
 import { batch, createMemo, createRoot, createSignal } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { parseComment, type Shape, withCommentText, withShapes } from "../chess/annotations";
 import { fenTurn } from "../chess/board";
 import { type Nag, type NagChoice, toggleNagChoice, toggleQualityNag } from "../chess/nag";
 import { header, type PgnGame } from "../chess/pgn";
-import { type Accuracy, applyReview, mainlineAccuracy } from "../chess/review";
+import {
+  type Accuracy,
+  mainlineAccuracy,
+  type ReviewedPosition,
+  recordReview,
+} from "../chess/review";
 import { type MoveInput, makeMove } from "../chess/rules";
-import type { Score } from "../chess/score";
 import {
   addMove,
   deleteNode,
@@ -169,9 +173,19 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       });
     };
 
-    /** Stores engine evaluations by node and annotates the main line's weak moves with them. */
-    const review = (scores: ReadonlyMap<NodeId, Score>) => {
-      setTree(produce((draft) => applyReview(draft, scores)));
+    /** Stores what a review to `depth` found for a position and judges the moves around it. */
+    const review = (id: NodeId, result: ReviewedPosition, depth: number) => {
+      setTree(produce((draft) => recordReview(draft, id, result, depth)));
+    };
+
+    /** Replaces the whole game, e.g. when a game from Lichess turns out to start elsewhere. */
+    const reset = (game: PgnGame) => {
+      batch(() => {
+        setTree(reconcile(treeFromPgn(game)));
+        setHeaders(game.headers);
+        setCurrentId(tree.rootId);
+        setLineEndId(lineEnd(tree, tree.rootId));
+      });
     };
 
     const promote = (id: NodeId) => {
@@ -205,6 +219,7 @@ export function createGameSession(game: PgnGame, options: SessionOptions = {}) {
       review,
       remove,
       promote,
+      reset,
       toPgn: () => treeToPgn(tree, headers()),
       /** The current node as an `indexPath`, for restoring it later. */
       position: () => indexPath(tree, currentId()),

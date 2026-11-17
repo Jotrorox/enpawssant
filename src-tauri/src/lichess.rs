@@ -5,6 +5,10 @@
 //! clients, so no client secret is needed. Signing in opens lichess.org in the
 //! browser with a redirect to a one-shot HTTP listener on 127.0.0.1, which
 //! receives the authorization code. The token never reaches the frontend.
+//!
+//! Besides plain requests, Lichess streams newline-delimited JSON for games,
+//! account events and seeks; `stream` reads those line by line until the
+//! server closes the connection or the caller stops listening.
 
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
@@ -22,7 +26,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use url::Url;
 
-const LICHESS: &str = "https://lichess.org";
+pub(crate) const LICHESS: &str = "https://lichess.org";
 /// Lichess does not register public clients; the ID is shown on its consent page.
 const CLIENT_ID: &str = "enpawssant";
 const KEYRING_SERVICE: &str = "com.jotrorox.enpawssant";
@@ -32,6 +36,15 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Lichess asks clients to wait a minute after being rate limited.
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Streams send an empty line every few seconds; silence for this long means
+/// the connection is gone.
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Permissions asked for when signing in: playing games through the Board API
+/// and sending, accepting and declining challenges. Reading public data, as
+/// the opening explorer does, needs none.
+const SCOPES: [&str; 3] = ["board:play", "challenge:read", "challenge:write"];
+/// Longest streamed line accepted; game and event lines are a few kB at most.
+const MAX_STREAM_LINE: usize = 1024 * 1024;
 /// Requests to the callback listener larger than this are rejected.
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
@@ -40,6 +53,9 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     username: String,
+    /// Whether the token may play games and handle challenges. Tokens from
+    /// before playing was supported may only read.
+    can_play: bool,
 }
 
 /// The account as stored in the keychain.
@@ -47,6 +63,20 @@ pub struct Account {
 struct Stored {
     username: String,
     token: String,
+    /// The scopes the token was granted; missing for tokens without any.
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+impl Stored {
+    fn account(&self) -> Account {
+        Account {
+            username: self.username.clone(),
+            can_play: SCOPES
+                .iter()
+                .all(|scope| self.scopes.iter().any(|s| s == scope)),
+        }
+    }
 }
 
 /// Why an authenticated request failed.
@@ -57,6 +87,8 @@ pub enum RequestError {
     SignedOut,
     /// Lichess asked us to slow down; requests resume after a minute.
     RateLimited,
+    /// There is nothing at that address, e.g. no player with that name.
+    NotFound,
     Failed {
         message: String,
     },
@@ -72,6 +104,8 @@ impl RequestError {
 
 pub struct Lichess {
     http: reqwest::Client,
+    /// Without an overall timeout, for streams that stay open for a whole game.
+    stream_http: reqwest::Client,
     /// `None` until the keychain has been read.
     account: Mutex<Option<Option<Stored>>>,
     /// Lichess asks for one request at a time.
@@ -81,19 +115,32 @@ pub struct Lichess {
     cancel_sign_in: Mutex<Option<oneshot::Sender<()>>>,
 }
 
+const USER_AGENT: &str = concat!(
+    "EnPawssant/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Jotrorox/enpawssant)"
+);
+
+/// An HTTP client that names the app, for Lichess and Chess.com.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("the HTTP client configuration is valid")
+}
+
 impl Default for Lichess {
     fn default() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(concat!(
-                "EnPawssant/",
-                env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/Jotrorox/enpawssant)"
-            ))
-            .timeout(REQUEST_TIMEOUT)
+        let stream_http = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .connect_timeout(REQUEST_TIMEOUT)
+            .read_timeout(STREAM_READ_TIMEOUT)
             .build()
             .expect("the HTTP client configuration is valid");
         Lichess {
-            http,
+            http: http_client(),
+            stream_http,
             account: Mutex::new(None),
             request_lock: tokio::sync::Mutex::new(()),
             paused_until: Mutex::new(None),
@@ -105,9 +152,7 @@ impl Default for Lichess {
 impl Lichess {
     /// The signed-in account, if any.
     pub async fn account(&self) -> Option<Account> {
-        self.stored().await.map(|stored| Account {
-            username: stored.username,
-        })
+        self.stored().await.map(|stored| stored.account())
     }
 
     async fn stored(&self) -> Option<Stored> {
@@ -151,6 +196,7 @@ impl Lichess {
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("code_challenge_method", "S256")
             .append_pair("code_challenge", &code_challenge(&verifier))
+            .append_pair("scope", &SCOPES.join(" "))
             .append_pair("state", &state);
         open::that_detached(authorize.as_str())
             .map_err(|e| format!("could not open the browser: {e}"))?;
@@ -165,15 +211,34 @@ impl Lichess {
 
         let token = self.exchange_code(&code, &verifier, &redirect_uri).await?;
         let username = self.fetch_username(&token).await?;
-        let stored = Stored { username, token };
+        let previous = self.stored().await;
+        // Lichess grants every scope on its consent page or none at all.
+        let stored = Stored {
+            username,
+            token,
+            scopes: SCOPES.iter().map(|scope| scope.to_string()).collect(),
+        };
         let saved = stored.clone();
         tokio::task::spawn_blocking(move || save_account(&saved))
             .await
             .map_err(|e| e.to_string())??;
         self.set_account(Some(stored.clone()));
-        Ok(Account {
-            username: stored.username,
-        })
+        // Signing in again (e.g. to allow playing) replaces the old token, which is of no
+        // further use.
+        if let Some(previous) = previous.filter(|previous| previous.token != stored.token) {
+            self.revoke(&previous.token).await;
+        }
+        Ok(stored.account())
+    }
+
+    /// Revokes a token, on a best-effort basis.
+    async fn revoke(&self, token: &str) {
+        let _ = self
+            .http
+            .delete(format!("{LICHESS}/api/token"))
+            .bearer_auth(token)
+            .send()
+            .await;
     }
 
     /// Stops waiting for the browser.
@@ -192,12 +257,7 @@ impl Lichess {
             .map_err(|e| e.to_string())??;
         if let Some(stored) = stored {
             // Best effort: the token is gone from this machine either way.
-            let _ = self
-                .http
-                .delete(format!("{LICHESS}/api/token"))
-                .bearer_auth(&stored.token)
-                .send()
-                .await;
+            self.revoke(&stored.token).await;
         }
         Ok(())
     }
@@ -208,25 +268,166 @@ impl Lichess {
         url: &str,
         query: &[(&str, String)],
     ) -> Result<T, RequestError> {
-        let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
-        let _turn = self.request_lock.lock().await;
-        if self
-            .paused_until
-            .lock()
-            .unwrap()
-            .is_some_and(|until| Instant::now() < until)
-        {
-            return Err(RequestError::RateLimited);
-        }
+        let body = self
+            .get(url, query, "application/json", REQUEST_TIMEOUT, true)
+            .await?;
+        serde_json::from_str(&body).map_err(RequestError::failed)
+    }
 
-        let response = self
+    /// Sends a GET request that also works signed out and returns the response as text. Signed
+    /// in, the request uses the account's token, which Lichess serves faster.
+    pub async fn get_public_text(
+        &self,
+        url: &str,
+        query: &[(&str, String)],
+        accept: &str,
+        timeout: Duration,
+    ) -> Result<String, RequestError> {
+        self.get(url, query, accept, timeout, false).await
+    }
+
+    async fn get(
+        &self,
+        url: &str,
+        query: &[(&str, String)],
+        accept: &str,
+        timeout: Duration,
+        needs_account: bool,
+    ) -> Result<String, RequestError> {
+        let mut stored = self.stored().await;
+        if needs_account && stored.is_none() {
+            return Err(RequestError::SignedOut);
+        }
+        let _turn = self.request_lock.lock().await;
+        loop {
+            if self
+                .paused_until
+                .lock()
+                .unwrap()
+                .is_some_and(|until| Instant::now() < until)
+            {
+                return Err(RequestError::RateLimited);
+            }
+
+            let mut request = self
+                .http
+                .get(url)
+                .query(query)
+                .header(reqwest::header::ACCEPT, accept)
+                .timeout(timeout);
+            if let Some(stored) = &stored {
+                request = request.bearer_auth(&stored.token);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|e| RequestError::failed(without_url(e)))?;
+            return match response.status() {
+                StatusCode::UNAUTHORIZED if stored.is_some() => {
+                    // The token was revoked or has expired; it is of no further use.
+                    self.set_account(None);
+                    let _ = tokio::task::spawn_blocking(delete_account).await;
+                    if needs_account {
+                        Err(RequestError::SignedOut)
+                    } else {
+                        stored = None;
+                        continue;
+                    }
+                }
+                StatusCode::TOO_MANY_REQUESTS => {
+                    *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                    Err(RequestError::RateLimited)
+                }
+                StatusCode::NOT_FOUND => Err(RequestError::NotFound),
+                status if !status.is_success() => {
+                    Err(RequestError::failed(format!("Lichess answered {status}")))
+                }
+                _ => response
+                    .text()
+                    .await
+                    .map_err(|e| RequestError::failed(without_url(e))),
+            };
+        }
+    }
+
+    /// Sends an authenticated request to lichess.org (`path` starts with `/`)
+    /// and returns its JSON response, or `null` for an empty or non-JSON one.
+    /// Unlike explorer lookups these are the user's own actions, like moves,
+    /// so they neither queue behind other requests nor wait out the pause
+    /// after the explorer was rate limited: a move held back for a minute
+    /// could lose the game on time.
+    pub async fn send(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        form: &[(&str, String)],
+    ) -> Result<serde_json::Value, RequestError> {
+        let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
+        let mut request = self
             .http
-            .get(url)
-            .query(query)
-            .bearer_auth(&stored.token)
+            .request(method, format!("{LICHESS}{path}"))
+            .bearer_auth(&stored.token);
+        if !form.is_empty() {
+            request = request.form(form);
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| RequestError::failed(without_url(e)))?;
+        let body = self
+            .check(response, false)
+            .await?
+            .bytes()
+            .await
+            .map_err(|e| RequestError::failed(without_url(e)))?;
+        Ok(serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Opens a newline-delimited JSON stream on lichess.org and hands each
+    /// line to `on_line` until the server closes it (`Ok(true)`) or `stop`
+    /// fires (`Ok(false)`). A `POST` is sent when `form` is given.
+    pub async fn stream(
+        &self,
+        path: &str,
+        form: Option<&[(&str, String)]>,
+        mut stop: oneshot::Receiver<()>,
+        mut on_line: impl FnMut(serde_json::Value),
+    ) -> Result<bool, RequestError> {
+        let stored = self.stored().await.ok_or(RequestError::SignedOut)?;
+        let url = format!("{LICHESS}{path}");
+        let request = match form {
+            Some(form) => self.stream_http.post(url).form(form),
+            None => self.stream_http.get(url),
+        }
+        .bearer_auth(&stored.token);
+        let response = tokio::select! {
+            response = request.send() => response.map_err(|e| RequestError::failed(without_url(e)))?,
+            _ = &mut stop => return Ok(false),
+        };
+        let mut response = self.check(response, false).await?;
+        let mut lines = LineBuffer::default();
+        loop {
+            let chunk = tokio::select! {
+                chunk = response.chunk() => chunk.map_err(|e| RequestError::failed(without_url(e)))?,
+                _ = &mut stop => return Ok(false),
+            };
+            let Some(chunk) = chunk else {
+                return Ok(true);
+            };
+            for line in lines.push(&chunk)? {
+                on_line(line);
+            }
+        }
+    }
+
+    /// Turns error statuses into `RequestError`s, with Lichess's own message
+    /// where it gives one (e.g. "Not your turn, or game already over"). Being
+    /// rate limited pauses further explorer requests when `pause` is set.
+    async fn check(
+        &self,
+        response: reqwest::Response,
+        pause: bool,
+    ) -> Result<reqwest::Response, RequestError> {
         match response.status() {
             StatusCode::UNAUTHORIZED => {
                 // The token was revoked or has expired; it is of no further use.
@@ -235,16 +436,18 @@ impl Lichess {
                 Err(RequestError::SignedOut)
             }
             StatusCode::TOO_MANY_REQUESTS => {
-                *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                if pause {
+                    *self.paused_until.lock().unwrap() = Some(Instant::now() + RATE_LIMIT_PAUSE);
+                }
                 Err(RequestError::RateLimited)
             }
             status if !status.is_success() => {
-                Err(RequestError::failed(format!("Lichess answered {status}")))
+                let body = response.text().await.unwrap_or_default();
+                Err(RequestError::failed(
+                    error_message(&body).unwrap_or_else(|| format!("Lichess answered {status}")),
+                ))
             }
-            _ => response
-                .json()
-                .await
-                .map_err(|e| RequestError::failed(without_url(e))),
+            _ => Ok(response),
         }
     }
 
@@ -296,8 +499,61 @@ async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, St
     response.json().await.map_err(without_url)
 }
 
+/// Splits streamed bytes into JSON lines. Empty lines are keep-alives, and
+/// lines that aren't JSON are skipped.
+#[derive(Default)]
+struct LineBuffer {
+    pending: Vec<u8>,
+}
+
+impl LineBuffer {
+    fn push(&mut self, bytes: &[u8]) -> Result<Vec<serde_json::Value>, RequestError> {
+        self.pending.extend_from_slice(bytes);
+        let mut values = Vec::new();
+        while let Some(end) = self.pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            let line = line.trim_ascii();
+            if !line.is_empty()
+                && let Ok(value) = serde_json::from_slice(line)
+            {
+                values.push(value);
+            }
+        }
+        if self.pending.len() > MAX_STREAM_LINE {
+            return Err(RequestError::failed("Lichess sent an overlong line"));
+        }
+        Ok(values)
+    }
+}
+
+/// The `error` field of a Lichess error response, if it has one. Some errors
+/// are objects of field errors, e.g. `{"error":{"days":["Invalid value"]}}`.
+fn error_message(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    match value.get("error")? {
+        serde_json::Value::String(message) => Some(message.clone()),
+        serde_json::Value::Object(fields) => Some(
+            fields
+                .iter()
+                .map(|(field, errors)| match errors {
+                    serde_json::Value::Array(list) => format!(
+                        "{field}: {}",
+                        list.iter()
+                            .filter_map(|e| e.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    other => format!("{field}: {other}"),
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+        _ => None,
+    }
+}
+
 /// Describes a request error without its URL, which can be long and holds the query.
-fn without_url(error: reqwest::Error) -> String {
+pub(crate) fn without_url(error: reqwest::Error) -> String {
     error.without_url().to_string()
 }
 
@@ -443,6 +699,43 @@ mod tests {
         let token = random_token().unwrap();
         assert_eq!(token.len(), 43);
         assert_ne!(token, random_token().unwrap());
+    }
+
+    #[test]
+    fn splits_streamed_lines() {
+        let mut lines = LineBuffer::default();
+        assert!(lines.push(b"{\"type\":\"gameSt").unwrap().is_empty());
+        let values = lines
+            .push(b"ate\"}\n\n{\"a\":1}\nnot json\n{\"b\"")
+            .unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0]["type"], "gameState");
+        assert_eq!(values[1]["a"], 1);
+        assert_eq!(lines.push(b":2}\r\n").unwrap()[0]["b"], 2);
+    }
+
+    #[test]
+    fn reads_lichess_error_messages() {
+        assert_eq!(
+            error_message(r#"{"error":"Not your turn, or game already over"}"#).as_deref(),
+            Some("Not your turn, or game already over")
+        );
+        assert_eq!(
+            error_message(r#"{"error":{"days":["Invalid value"]}}"#).as_deref(),
+            Some("days: Invalid value")
+        );
+        assert_eq!(error_message("<html>"), None);
+    }
+
+    #[test]
+    fn tokens_without_scopes_cannot_play() {
+        let old: Stored = serde_json::from_str(r#"{"username":"Mochi","token":"t"}"#).unwrap();
+        assert!(!old.account().can_play);
+        let new = Stored {
+            scopes: SCOPES.iter().map(|s| s.to_string()).collect(),
+            ..old
+        };
+        assert!(new.account().can_play);
     }
 
     #[test]

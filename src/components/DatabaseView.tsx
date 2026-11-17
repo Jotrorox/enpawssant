@@ -1,5 +1,6 @@
 // The Database section: search the local game database by text, player, opening, result or
-// position, open games in tabs, and fill it from PGN files or the board.
+// position, open games in tabs, and fill it from PGN files or the board. The user's own names live
+// here too, for "only my games", the explorer's personal scores and puzzles from their blunders.
 
 import {
   createEffect,
@@ -24,12 +25,15 @@ import {
   type GameSummary,
   importProgress,
   looksLikeFen,
+  myNames,
+  reloadMyNames,
   type SearchQuery,
   type SearchResult,
   searchGames,
 } from "../chess/database";
 import { formatSize } from "../chess/files";
-import { DatabaseIcon, ImportIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
+import { DatabaseIcon, DownloadIcon, ImportIcon, PlusIcon, SearchIcon, TrashIcon } from "./Icons";
+import { NamesForm } from "./MyNames";
 import {
   Card,
   EmptyState,
@@ -63,10 +67,14 @@ type DatabaseViewProps = {
   request?: DatabaseRequest;
   /** The position on the board, if a game is open. */
   currentFen?: string;
+  /** A game is in progress, so the position on the board can't be copied into the search. */
+  fairPlay?: boolean;
   /** Whether a game is open to add. */
   canAddCurrent: boolean;
   onAddCurrent: () => void;
   onImportFiles: () => void;
+  /** Opens the import dialog on its Lichess and Chess.com tabs. */
+  onImportOnline: () => void;
   onOpenGame: (id: number, ply: number | null) => void;
   notify: (message: string, tone?: "info" | "error") => void;
 };
@@ -77,10 +85,15 @@ export function DatabaseView(props: DatabaseViewProps) {
   const [opening, setOpening] = createSignal("");
   const [result, setResult] = createSignal<ResultFilter>("");
   const [fen, setFen] = createSignal("");
+  const [mine, setMine] = createSignal(false);
+  const [editingNames, setEditingNames] = createSignal(false);
   const [page, setPage] = createSignal<SearchResult>();
   const [error, setError] = createSignal<string>();
   const [loading, setLoading] = createSignal(false);
   const [stats] = createResource(databaseVersion, () => databaseStats());
+  // Fresh suggestions for the user's names after imports.
+  createEffect(on(databaseVersion, () => void reloadMyNames(), { defer: true }));
+  const names = () => myNames()?.names ?? [];
 
   // Searches from the title bar fill the text or the position field.
   createEffect(
@@ -98,6 +111,7 @@ export function DatabaseView(props: DatabaseViewProps) {
         setPlayer("");
         setOpening("");
         setResult("");
+        setMine(false);
       },
     ),
   );
@@ -109,6 +123,7 @@ export function DatabaseView(props: DatabaseViewProps) {
     result: result(),
     // A half-typed FEN doesn't filter yet; the field turns red instead.
     fen: looksLikeFen(fen()) ? completeFen(fen()) : undefined,
+    mine: mine(),
     offset,
     limit: PAGE,
   });
@@ -165,13 +180,14 @@ export function DatabaseView(props: DatabaseViewProps) {
   };
 
   const filtered = () =>
-    [text(), player(), opening(), result(), fen()].some((value) => value.trim() !== "");
+    mine() || [text(), player(), opening(), result(), fen()].some((value) => value.trim() !== "");
   const resetFilters = () => {
     setText("");
     setPlayer("");
     setOpening("");
     setResult("");
     setFen("");
+    setMine(false);
   };
 
   return (
@@ -205,6 +221,10 @@ export function DatabaseView(props: DatabaseViewProps) {
         >
           <PlusIcon class="size-[18px]" />
           Add board game
+        </button>
+        <button type="button" class={SECONDARY_BUTTON} onClick={() => props.onImportOnline()}>
+          <DownloadIcon class="size-[18px]" />
+          From Lichess or Chess.com…
         </button>
         <button
           type="button"
@@ -297,8 +317,12 @@ export function DatabaseView(props: DatabaseViewProps) {
           <button
             type="button"
             class={`${SECONDARY_BUTTON} h-9`}
-            disabled={!props.currentFen}
-            title="Search for the position on the board"
+            disabled={!props.currentFen || props.fairPlay}
+            title={
+              props.fairPlay
+                ? "Off while a game is in progress"
+                : "Search for the position on the board"
+            }
             onClick={() => setFen(props.currentFen ?? "")}
           >
             Board position
@@ -312,6 +336,47 @@ export function DatabaseView(props: DatabaseViewProps) {
             class="shrink-0 border border-blush-200/80 bg-blush-50"
           />
         </div>
+        <div class="mt-2.5 flex min-h-7 items-center gap-2.5 text-[13px]">
+          <label
+            class={`flex shrink-0 items-center gap-2 font-semibold ${names().length === 0 ? "opacity-50" : "cursor-pointer"}`}
+            title={names().length === 0 ? "Tell Mochi your names first" : undefined}
+          >
+            <input
+              type="checkbox"
+              checked={mine()}
+              disabled={names().length === 0}
+              onChange={(event) => setMine(event.currentTarget.checked)}
+              class="size-4 accent-rose"
+            />
+            Only my games
+          </label>
+          <span class="min-w-0 truncate text-muted">
+            <Show
+              when={names().length > 0}
+              fallback="Mochi doesn't know which players are you yet."
+            >
+              You play as {names().join(", ")}
+            </Show>
+          </span>
+          <button
+            type="button"
+            class="shrink-0 font-semibold text-muted underline-offset-2 hover:text-ink hover:underline"
+            aria-expanded={editingNames()}
+            onClick={() => setEditingNames((open) => !open)}
+          >
+            {editingNames() ? "Done" : names().length > 0 ? "Change" : "Add your names"}
+          </button>
+        </div>
+        <Show when={editingNames()}>
+          <NamesForm
+            class="mt-2"
+            intro="The names you play under, e.g. your Lichess and chess.com usernames. They let the explorer show how you score and Purrzles turn your blunders into puzzles."
+            onSaved={(saved) => {
+              if (saved.length === 0) setMine(false);
+              setEditingNames(false);
+            }}
+          />
+        </Show>
       </Card>
 
       <Card class="flex min-h-0 flex-1 flex-col px-3 pt-2 pb-2">
@@ -324,8 +389,9 @@ export function DatabaseView(props: DatabaseViewProps) {
               <DatabaseIcon class="size-8 text-rose" />
               <span class="font-bold text-ink">The database is empty</span>
               <span>
-                Import PGN files, drop them onto this window or save the game on the board. Games
-                are indexed by position, so you can find every game that reached a position.
+                Import PGN files or your games from Lichess and Chess.com, drop files onto this
+                window or save the game on the board. Games are indexed by position, so you can find
+                every game that reached a position.
               </span>
             </EmptyState>
           </Match>

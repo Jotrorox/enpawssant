@@ -28,6 +28,7 @@ import {
   legalDests,
   type MoveInput,
   parseFen,
+  premoveDests,
   squareIndex,
 } from "../chess/rules";
 import { playSound, primeAudio, type SoundKind } from "../chess/sound";
@@ -84,6 +85,17 @@ type BoardProps = {
   arrows?: Arrow[];
   /** Called with each legal move the user makes. Without it the board is read-only. */
   onMove?: (move: MoveInput) => void;
+  /**
+   * Premoves while the opponent is to move: `color`'s pieces can be moved anywhere they might be
+   * able to go after the opponent's move, and `onSet` is called with that move (promoting to a
+   * queen), or with nothing to cancel the queued one, `current`.
+   */
+  premove?: {
+    color: Color;
+    enabled: boolean;
+    current?: MoveInput;
+    onSet: (move?: MoveInput) => void;
+  };
   /** Play a sound when the position changes. */
   sound?: boolean;
   /**
@@ -96,9 +108,22 @@ type BoardProps = {
 
 export function Board(props: BoardProps) {
   const position = createMemo(() => parseFen(props.fen));
-  const dests = createMemo(() =>
-    props.onMove ? legalDests(position()) : new Map<Square, Square[]>(),
-  );
+  /** Whether the board takes premoves rather than moves right now. */
+  const premoving = () => !props.onMove && !!props.premove?.enabled;
+  const dests = createMemo(() => {
+    if (props.onMove) return legalDests(position());
+    const premove = props.premove;
+    if (premove?.enabled) return premoveDests(position(), premove.color);
+    return new Map<Square, Square[]>();
+  });
+  /** The squares of the queued premove, tinted until it's played. */
+  const premoveSquares = () => {
+    const current = props.premove?.current;
+    return current ? [current.from, current.to] : [];
+  };
+  const cancelPremove = () => {
+    if (props.premove?.current) props.premove.onSet(undefined);
+  };
   const squares = createMemo(() => displaySquares(props.orientation));
   const bottomRank = () => (props.orientation === "w" ? "1" : "8");
   const leftFile = () => (props.orientation === "w" ? "a" : "h");
@@ -225,7 +250,9 @@ export function Board(props: BoardProps) {
 
   const play = (from: Square, to: Square) => {
     setSelected(undefined);
-    if (isPromotion(position(), from, to)) setPromotion({ from, to });
+    // Premoves promote to a queen; there is no time to ask.
+    if (premoving()) props.premove?.onSet({ from, to });
+    else if (isPromotion(position(), from, to)) setPromotion({ from, to });
     else props.onMove?.({ from, to });
   };
 
@@ -246,6 +273,7 @@ export function Board(props: BoardProps) {
     landedByDrop = false;
 
     if (event.button === 2) {
+      cancelPremove();
       boardEl.setPointerCapture(event.pointerId);
       setDrawing({ from: at.square, to: at.square, color: shapeColor(event) });
       return;
@@ -264,6 +292,7 @@ export function Board(props: BoardProps) {
       : undefined;
     if (!piece) {
       setSelected(undefined);
+      cancelPremove();
       return;
     }
     event.preventDefault();
@@ -315,7 +344,8 @@ export function Board(props: BoardProps) {
       setDrag(undefined);
       if (current.active) {
         if (legal) {
-          landedByDrop = true;
+          // A premove leaves the position as it is, so the piece glides back home.
+          if (!premoving()) landedByDrop = true;
           play(current.from, target);
         }
       } else if (current.wasSelected) {
@@ -338,6 +368,7 @@ export function Board(props: BoardProps) {
     if (event.key !== "Escape") return;
     setPromotion(undefined);
     setSelected(undefined);
+    cancelPremove();
   };
   window.addEventListener("keydown", onKeyDown);
   onCleanup(() => window.removeEventListener("keydown", onKeyDown));
@@ -407,6 +438,7 @@ export function Board(props: BoardProps) {
                           : undefined
                     }
                     selected={selected() === square}
+                    premove={premoveSquares().includes(square)}
                     check={check() === square}
                     hint={
                       selectedDests().includes(square)
@@ -526,6 +558,8 @@ function BoardSquare(props: {
   square: Square;
   lastMove?: "from" | "to";
   selected: boolean;
+  /** Part of the queued premove. */
+  premove: boolean;
   check: boolean;
   hint?: "move" | "capture";
   hovered: boolean;
@@ -547,6 +581,9 @@ function BoardSquare(props: {
     <div class={`relative transition-colors duration-200 ${background()}`}>
       <span
         class={`absolute inset-0 bg-rose/30 transition-opacity duration-150 ${fade(props.selected)}`}
+      />
+      <span
+        class={`absolute inset-0 bg-nag-interesting/45 transition-opacity duration-150 ${fade(props.premove)}`}
       />
       <span
         class={`board-check absolute inset-0 transition-opacity duration-200 ${fade(props.check)}`}

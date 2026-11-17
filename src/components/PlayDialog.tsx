@@ -243,7 +243,8 @@ export function PlayDialog(props: PlayDialogProps) {
           </Field>
 
           <p class="text-[12px] text-muted">
-            Live analysis, the eval bar and the opening explorer take a nap until the game is over.
+            Fair play: the engine, the opening explorer, Copy FEN and Export PGN take a nap in every
+            tab until the game is over.
           </p>
 
           <div class="flex items-center justify-end gap-2">

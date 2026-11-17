@@ -27,6 +27,10 @@ export type MoveNode = {
   comment?: string;
   /** The stored evaluation: imported from a `[%eval]`, or written by a game review. */
   eval?: PgnMove["eval"];
+  /** How deep the engine searched for `eval`, if known. */
+  evalDepth?: number;
+  /** The engine's best move in this position (UCI), written by a game review. */
+  bestMove?: string;
 };
 
 export type GameTree = {
@@ -176,6 +180,8 @@ export function treeFromPgn(game: Pick<PgnGame, "startFen" | "moves" | "comment"
       node.startingComment = move.startingComment;
       node.comment = move.comment;
       node.eval = move.eval;
+      node.evalDepth = move.evalDepth;
+      node.bestMove = move.bestMove;
       for (const variation of move.variations ?? []) addLine(parent, variation);
       parent = node.id;
     }
@@ -193,6 +199,8 @@ export function treeToPgn(tree: GameTree, headers: [string, string][]): PgnGame 
     startingComment: node.startingComment,
     comment: node.comment,
     eval: node.eval,
+    evalDepth: node.evalDepth,
+    bestMove: node.bestMove,
   });
   /** The line after `parentId`, starting with `firstId` (a variation) or the main move. */
   const line = (parentId: NodeId, firstId?: NodeId): PgnMove[] => {

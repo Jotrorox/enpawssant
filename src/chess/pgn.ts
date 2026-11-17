@@ -15,6 +15,13 @@ export type PgnMove = {
   comment?: string;
   /** From a `[%eval]` command; never a game result. */
   eval?: Exclude<Score, { result: unknown }>;
+  /** How deep the engine searched for `eval`, if known (`[%eval 0.31,22]`). */
+  evalDepth?: number;
+  /**
+   * The engine's best move in the position after this move, in UCI, as found by a game review.
+   * Not part of PGN: Rust ignores it, but it survives in the saved workspace.
+   */
+  bestMove?: string;
   /** Lines that could have been played instead of this move. */
   variations?: PgnMove[][];
 };

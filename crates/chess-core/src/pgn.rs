@@ -71,6 +71,9 @@ pub struct Move {
     /// The evaluation from a `[%eval]` command, from White's point of view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval: Option<Score>,
+    /// How deep the engine searched for `eval`, when the `[%eval]` command says so (`[%eval 0.31,22]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_depth: Option<u16>,
     /// Lines that could have been played instead of this move.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variations: Vec<Vec<Move>>,
@@ -303,6 +306,7 @@ impl Visitor for GameBuilder {
                     starting_comment: frame.pending_comment.take(),
                     comment: None,
                     eval: None,
+                    eval_depth: None,
                     variations: Vec::new(),
                 });
                 frame.before_last = before;
@@ -345,8 +349,9 @@ impl Visitor for GameBuilder {
         let (text, eval) = extract_eval(&text);
         match frame.moves.last_mut() {
             Some(last) => {
-                if eval.is_some() {
-                    last.eval = eval;
+                if let Some((score, depth)) = eval {
+                    last.eval = Some(score);
+                    last.eval_depth = depth;
                 }
                 append_comment(&mut last.comment, &text);
             }
@@ -443,8 +448,9 @@ fn append_comment(target: &mut Option<String>, text: &str) {
     }
 }
 
-/// Splits an `[%eval …]` command out of a comment, returning the remaining text and the score.
-fn extract_eval(comment: &str) -> (String, Option<Score>) {
+/// Splits an `[%eval …]` command out of a comment, returning the remaining text, the score and the
+/// search depth if the command gives one.
+fn extract_eval(comment: &str) -> (String, Option<(Score, Option<u16>)>) {
     let Some(start) = comment.find("[%eval") else {
         return (normalize_space(comment), None);
     };
@@ -453,7 +459,9 @@ fn extract_eval(comment: &str) -> (String, Option<Score>) {
     };
     let body = comment[start + "[%eval".len()..start + len].trim();
     // The value may be followed by a search depth, as in `[%eval 0.31,22]`.
-    let value = body.split(',').next().unwrap_or("").trim();
+    let mut parts = body.split(',');
+    let value = parts.next().unwrap_or("").trim();
+    let depth = parts.next().and_then(|depth| depth.trim().parse().ok());
     let score = match value.strip_prefix('#') {
         Some(mate) => mate.parse().ok().map(Score::Mate),
         // `[%eval]` gives pawns; anything beyond an `i32` of centipawns is nonsense.
@@ -465,7 +473,7 @@ fn extract_eval(comment: &str) -> (String, Option<Score>) {
             .map(|cp| Score::Cp(cp as i32)),
     };
     let rest = format!("{} {}", &comment[..start], &comment[start + len + 1..]);
-    (normalize_space(&rest), score)
+    (normalize_space(&rest), score.map(|score| (score, depth)))
 }
 
 fn normalize_space(text: &str) -> String {
@@ -560,7 +568,10 @@ fn write_line(text: &mut MovetextWriter, start: &Chess, line: &[Move]) -> Result
         }
         text.token(&token);
 
-        let mut comment = m.eval.map(eval_command).unwrap_or_default();
+        let mut comment = m
+            .eval
+            .map(|score| eval_command(score, m.eval_depth))
+            .unwrap_or_default();
         if let Some(c) = &m.comment {
             if !comment.is_empty() {
                 comment.push(' ');
@@ -595,10 +606,14 @@ fn nag_glyph(nag: u8) -> Option<&'static str> {
     }
 }
 
-fn eval_command(score: Score) -> String {
-    match score {
-        Score::Cp(cp) => format!("[%eval {:.2}]", f64::from(cp) / 100.0),
-        Score::Mate(moves) => format!("[%eval #{moves}]"),
+fn eval_command(score: Score, depth: Option<u16>) -> String {
+    let value = match score {
+        Score::Cp(cp) => format!("{:.2}", f64::from(cp) / 100.0),
+        Score::Mate(moves) => format!("#{moves}"),
+    };
+    match depth {
+        Some(depth) => format!("[%eval {value},{depth}]"),
+        None => format!("[%eval {value}]"),
     }
 }
 
@@ -691,6 +706,8 @@ mod tests {
         let bc5 = &game.moves[5];
         assert_eq!(bc5.nags, [1]);
         assert_eq!(bc5.eval, Some(Score::Cp(30)));
+        assert_eq!(bc5.eval_depth, Some(21));
+        assert_eq!(e4.eval_depth, None);
         assert_eq!(bc5.comment.as_deref(), Some("Solid."));
         assert_eq!(bc5.variations.len(), 2);
 
@@ -760,8 +777,8 @@ mod tests {
 [Result "*"]
 
 { A quiet start. } 1. e4 { [%eval 0.30] } 1... e5 2. Nf3 Nc6 3. Bc4 Bc5! {
-[%eval 0.30] Solid. } (3... Nf6 4. Ng5 d5 (4... Bc5 5. Bxf7+) 5. exd5 Na5?! {
-The Two Knights is sharper. }) (3... Be7?!) 4. c3 Nf6 *
+[%eval 0.30,21] Solid. } (3... Nf6 4. Ng5 d5 (4... Bc5 5. Bxf7+) 5. exd5 Na5?!
+{ The Two Knights is sharper. }) (3... Be7?!) 4. c3 Nf6 *
 "#
         );
         // Reading it back gives the same moves; only the missing roster tags were added.
@@ -805,6 +822,7 @@ The Two Knights is sharper. }) (3... Be7?!) 4. c3 Nf6 *
         let json = serde_json::to_string(&game).unwrap();
         assert!(json.contains(r#""startFen":"#));
         assert!(json.contains(r#""eval":{"cp":30}"#));
+        assert!(json.contains(r#""evalDepth":21"#));
         assert_eq!(serde_json::from_str::<Game>(&json).unwrap(), game);
     }
 }

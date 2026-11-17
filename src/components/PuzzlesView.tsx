@@ -1,23 +1,42 @@
 // The Purrzles section: puzzles from the Lichess puzzle database. Rated mode picks puzzles near
 // the player's rating and moves it after every first try; streak mode gets harder with every solve
-// and ends at the first mistake.
+// and ends at the first mistake. "My blunders" plays puzzles made from the user's own games.
 
-import { batch, createResource, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  batch,
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { createStore } from "solid-js/store";
 import { type Square, START_FEN } from "../chess/board";
+import { findGame, myNames } from "../chess/database";
 import { formatSize } from "../chess/files";
 import type { PgnGame } from "../chess/pgn";
 import {
+  blunderScan,
+  cancelBlunderSearch,
   cancelPuzzleDownload,
+  clearOwnPuzzles,
   type DownloadProgress,
   downloadPuzzles,
+  findBlunders,
   finishRun,
   judgeMove,
   type Mode,
+  nextOwnPuzzle,
   nextPuzzle,
+  type OwnStatus,
   openPuzzleGame,
+  opponentName,
   type Profile,
   type PuzzleData,
+  type PuzzleOrigin,
+  playedMove,
   playUci,
   puzzleGame,
   puzzleStatus,
@@ -39,9 +58,11 @@ import {
   ExternalIcon,
   FlameIcon,
   NextIcon,
+  SearchIcon,
   SoundOffIcon,
   SoundOnIcon,
 } from "./Icons";
+import { NamesForm } from "./MyNames";
 import {
   Card,
   CardTitle,
@@ -56,6 +77,7 @@ import {
 const MODES = [
   { value: "rated", label: "Rated" },
   { value: "streak", label: "Streak" },
+  { value: "mine", label: "My blunders" },
 ] as const;
 
 /** Pause before the opponent's first move, so the solver sees what happened. */
@@ -110,6 +132,8 @@ const moveOf = (uci: string) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
 
 export function PuzzlesView(props: {
   onAnalyze: (game: PgnGame, position: number[]) => void;
+  /** Opens a game from the database at `ply`. */
+  onOpenGame: (id: number, ply: number) => void;
   notify: (message: string, tone?: "info" | "error") => void;
 }) {
   const [status, { mutate, refetch }] = createResource(puzzleStatus);
@@ -155,11 +179,15 @@ export function PuzzlesView(props: {
     const current = ++loadRequest;
     setRound({ phase: "loading", feedback: "loading", hint: 0, lastMove: undefined });
     try {
-      const puzzle = await nextPuzzle({
-        target: mode() === "streak" ? streakTarget(run()) : undefined,
-        theme: mode() === "rated" ? theme() || undefined : undefined,
-        exclude: round.puzzle ? [round.puzzle.id] : [],
-      });
+      const exclude = round.puzzle ? [round.puzzle.id] : [];
+      const puzzle =
+        mode() === "mine"
+          ? await nextOwnPuzzle(exclude)
+          : await nextPuzzle({
+              target: mode() === "streak" ? streakTarget(run()) : undefined,
+              theme: mode() === "rated" ? theme() || undefined : undefined,
+              exclude,
+            });
       if (current !== loadRequest) return;
       if (!puzzle) {
         setRound({ puzzle: undefined, phase: "empty", feedback: "empty" });
@@ -333,6 +361,72 @@ export function PuzzlesView(props: {
 
   void load();
 
+  // --- Puzzles from the user's blunders ----------------------------------------------------------
+
+  const startBlunderSearch = async () => {
+    try {
+      const summary = await findBlunders();
+      const found = `${summary.found} ${summary.found === 1 ? "puzzle" : "puzzles"}`;
+      const games = `${summary.scanned} ${summary.scanned === 1 ? "game" : "games"}`;
+      if (summary.cancelled) {
+        props.notify(`Stopped after ${games}. Mochi found ${found} so far.`);
+      } else if (summary.scanned === 0) {
+        props.notify("Mochi has already looked through all your games. Import new ones for more.");
+      } else {
+        props.notify(`Mochi looked through ${games} and found ${found}.`);
+      }
+    } catch (e) {
+      props.notify(`Mochi couldn't look through your games: ${errorMessage(e)}`, "error");
+    } finally {
+      void refetch();
+    }
+  };
+
+  // New puzzles show up while the search runs.
+  createEffect(
+    on(
+      () => {
+        const progress = blunderScan();
+        return progress && progress !== "starting" ? progress.found : undefined;
+      },
+      (found, previous) => {
+        if (found === undefined || found === previous) return;
+        void refetch();
+        if (mode() === "mine" && round.phase === "empty" && found > 0) void load();
+      },
+    ),
+  );
+  createEffect(
+    on(
+      () => status()?.own.count ?? 0,
+      (count) => {
+        if (mode() === "mine" && round.phase === "empty" && count > 0) void load();
+      },
+      { defer: true },
+    ),
+  );
+
+  const clearOwn = async () => {
+    if (!window.confirm("Forget the puzzles from your games? Mochi can look for them again later."))
+      return;
+    try {
+      mutate(await clearOwnPuzzles());
+      if (mode() === "mine") void load();
+    } catch (e) {
+      props.notify(`Mochi couldn't forget them: ${errorMessage(e)}`, "error");
+    }
+  };
+
+  const openOrigin = async (origin: PuzzleOrigin) => {
+    try {
+      const id = await findGame(origin.game);
+      if (id === null) props.notify("That game is no longer in the database.", "error");
+      else props.onOpenGame(id, origin.ply);
+    } catch (e) {
+      props.notify(`Mochi couldn't open the game: ${errorMessage(e)}`, "error");
+    }
+  };
+
   // --- Library -----------------------------------------------------------------------------------
 
   const startDownload = async () => {
@@ -375,9 +469,14 @@ export function PuzzlesView(props: {
             />
             {round.phase === "loading" ? "Fetching a purrzle…" : `${sideName()} to play`}
           </h1>
-          <Show when={round.puzzle && done()}>
+          <Show when={round.puzzle && done() && !round.puzzle.origin}>
             <span class="ml-auto rounded-xl border border-blush-200 bg-white px-2.5 py-1 text-[13px] font-bold">
               Puzzle rating <span class="font-mono">{round.puzzle?.rating}</span>
+            </span>
+          </Show>
+          <Show when={round.puzzle?.origin && round.phase !== "loading"}>
+            <span class="ml-auto truncate rounded-xl border border-blush-200 bg-white px-2.5 py-1 text-[13px] font-bold">
+              From your game vs {round.puzzle && opponentName(round.puzzle)}
             </span>
           </Show>
         </div>
@@ -404,7 +503,7 @@ export function PuzzlesView(props: {
               <SoundOnIcon />
             </Show>
           </IconButton>
-          <Show when={mode() === "rated" && !done()}>
+          <Show when={mode() !== "streak" && round.puzzle && !done()}>
             <button
               type="button"
               class={SECONDARY_BUTTON}
@@ -467,9 +566,22 @@ export function PuzzlesView(props: {
           ratingChange={round.ratingChange}
           run={run()}
           mode={mode()}
+          played={round.puzzle ? playedMove(round.puzzle) : undefined}
         />
 
-        <Show when={done() && round.puzzle}>
+        <Show when={done() && round.puzzle?.origin && round.puzzle}>
+          {(puzzle) => (
+            <OriginCard
+              puzzle={puzzle()}
+              onOpen={() => {
+                const origin = puzzle().origin;
+                if (origin) void openOrigin(origin);
+              }}
+            />
+          )}
+        </Show>
+
+        <Show when={done() && round.puzzle && !round.puzzle.origin && round.puzzle}>
           {(puzzle) => (
             <Card class="shrink-0 px-[18px] pt-3 pb-3.5">
               <div class="mb-2 flex items-center gap-2">
@@ -506,24 +618,31 @@ export function PuzzlesView(props: {
           )}
         </Show>
 
+        <Show when={mode() === "mine"}>
+          <BlunderSearchCard
+            own={status()?.own}
+            onStart={() => void startBlunderSearch()}
+            onClear={() => void clearOwn()}
+          />
+        </Show>
+
         <ProfileCard profile={status()?.profile} history={status()?.history ?? []} />
 
-        <Show
-          when={mode() === "rated"}
-          fallback={
-            <Card class="shrink-0 px-[18px] py-3">
-              <div class="flex items-center gap-3">
-                <FlameIcon class="size-6 text-rose" />
-                <div class="min-w-0 flex-1">
-                  <p class="text-[14px] font-bold">{run()} solved in this streak</p>
-                  <p class="text-[12px] text-muted">
-                    Next puzzle around {streakTarget(run())} · one mistake ends the streak
-                  </p>
-                </div>
+        <Show when={mode() === "streak"}>
+          <Card class="shrink-0 px-[18px] py-3">
+            <div class="flex items-center gap-3">
+              <FlameIcon class="size-6 text-rose" />
+              <div class="min-w-0 flex-1">
+                <p class="text-[14px] font-bold">{run()} solved in this streak</p>
+                <p class="text-[12px] text-muted">
+                  Next puzzle around {streakTarget(run())} · one mistake ends the streak
+                </p>
               </div>
-            </Card>
-          }
-        >
+            </div>
+          </Card>
+        </Show>
+
+        <Show when={mode() === "rated"}>
           <Card class="shrink-0 px-[18px] py-3">
             <label class="flex items-center gap-3">
               <span class="text-[14px] font-bold">Theme</span>
@@ -543,7 +662,7 @@ export function PuzzlesView(props: {
           </Card>
         </Show>
 
-        <Card class="shrink-0 px-[18px] pt-3 pb-3.5">
+        <Card class={`shrink-0 px-[18px] pt-3 pb-3.5 ${mode() === "mine" ? "hidden" : ""}`}>
           <div class="mb-1 flex items-center gap-2">
             <CardTitle>Puzzle library</CardTitle>
             <button
@@ -599,8 +718,40 @@ function FeedbackCard(props: {
   ratingChange: number | null;
   run: number;
   mode: Mode;
+  /** For puzzles from the user's games: the move they played instead, e.g. `23...Qh5??`. */
+  played?: string;
 }) {
   const text = (): { title: string; detail: string; tone: "plain" | "good" | "bad" } => {
+    if (props.mode === "mine") {
+      switch (props.feedback) {
+        case "watch":
+          return {
+            title: "Remember this one?",
+            detail: "Your opponent is about to play their move from the game.",
+            tone: "plain",
+          };
+        case "find":
+          return {
+            title: "Your move",
+            detail: `In the game you played ${props.played ?? "something else"} here. Find the better move for ${props.side}.`,
+            tone: "plain",
+          };
+        case "solved":
+          return {
+            title: "Solved!",
+            detail: "That's the one. Next time it's yours over the board.",
+            tone: "good",
+          };
+        case "solution":
+          return { title: "Here's what you missed", detail: "Watch how it goes.", tone: "plain" };
+        case "empty":
+          return {
+            title: "No blunder puzzles yet",
+            detail: "Let Mochi look through your games for moves you'd like back.",
+            tone: "plain",
+          };
+      }
+    }
     switch (props.feedback) {
       case "loading":
         return { title: "One moment…", detail: "Mochi is picking a purrzle.", tone: "plain" };
@@ -801,5 +952,158 @@ function DownloadStatus(props: { progress: DownloadProgress | "starting" }) {
         Stop
       </button>
     </div>
+  );
+}
+
+function OriginCard(props: { puzzle: PuzzleData; onOpen: () => void }) {
+  const origin = () => props.puzzle.origin as PuzzleOrigin;
+  const players = () => `${origin().white || "?"} – ${origin().black || "?"}`;
+  const date = () =>
+    origin()
+      .date.split(".")
+      .filter((part) => /^\d+$/.test(part))
+      .join("-");
+  return (
+    <Card class="shrink-0 px-[18px] pt-3 pb-3.5">
+      <div class="mb-1.5 flex items-center gap-2">
+        <CardTitle>From your game</CardTitle>
+        <button
+          type="button"
+          class="ml-auto flex items-center gap-1 text-[12px] font-semibold text-muted hover:text-ink"
+          onClick={() => props.onOpen()}
+        >
+          Open the game
+          <ChartIcon class="size-3.5" />
+        </button>
+      </div>
+      <p class="truncate text-[13px] font-bold" title={players()}>
+        {players()}
+      </p>
+      <p class="truncate text-[12px] text-muted">
+        {[date(), origin().event].filter(Boolean).join(" · ") || "Date unknown"}
+      </p>
+      <p class="mt-2 text-[13px] leading-snug">
+        You played <span class="font-bold">{playedMove(props.puzzle) ?? origin().played}</span>,
+        which gave away about {Math.round(origin().loss)}% of your winning chances.
+      </p>
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        <For each={props.puzzle.themes}>
+          {(key) => (
+            <span class="rounded-full bg-blush-100 px-2.5 py-0.5 text-[12px] font-semibold">
+              {themeLabel(key)}
+            </span>
+          )}
+        </For>
+      </div>
+    </Card>
+  );
+}
+
+function BlunderSearchCard(props: { own?: OwnStatus; onStart: () => void; onClear: () => void }) {
+  const [editing, setEditing] = createSignal(false);
+  const names = () => myNames()?.names ?? [];
+  const progress = () => {
+    const scan = blunderScan();
+    return scan === "starting" ? undefined : scan;
+  };
+  const fraction = () => {
+    const current = progress();
+    if (!current || current.gamesTotal === 0) return undefined;
+    const inGame = current.positionsTotal > 0 ? current.positionsDone / current.positionsTotal : 0;
+    return (current.gamesDone + Math.min(1, inGame)) / current.gamesTotal;
+  };
+
+  return (
+    <Card class="shrink-0 px-[18px] pt-3 pb-3.5">
+      <div class="mb-1 flex items-center gap-2">
+        <CardTitle>Puzzles from your games</CardTitle>
+        <Show when={(props.own?.count ?? 0) > 0 && !blunderScan()}>
+          <button
+            type="button"
+            class="ml-auto text-[12px] font-semibold text-muted underline-offset-2 hover:text-ink hover:underline"
+            onClick={() => props.onClear()}
+          >
+            Forget them
+          </button>
+        </Show>
+      </div>
+      <Show
+        when={names().length > 0 && !editing()}
+        fallback={
+          <NamesForm
+            intro="Which names do you play under? Mochi looks for them in your game database, finds the moves you'd want back and turns them into puzzles."
+            onSaved={(saved) => setEditing(saved.length === 0)}
+          />
+        }
+      >
+        <p class="text-[13px] text-muted">
+          <Show when={props.own} fallback="Counting…">
+            {(own) => (
+              <>
+                {own().count} {own().count === 1 ? "puzzle" : "puzzles"}
+                {own().fresh > 0 ? `, ${own().fresh} new` : ""}
+                {own().missed > 0 ? `, ${own().missed} to try again` : ""} · {own().scannedGames}{" "}
+                {own().scannedGames === 1 ? "game" : "games"} looked through
+              </>
+            )}
+          </Show>
+        </p>
+        <p class="mt-0.5 truncate text-[12px] text-muted">
+          As {names().join(", ")} ·{" "}
+          <button
+            type="button"
+            class="font-semibold underline-offset-2 hover:text-ink hover:underline"
+            onClick={() => setEditing(true)}
+          >
+            Change
+          </button>
+        </p>
+        <Show
+          when={blunderScan()}
+          fallback={
+            <>
+              <button
+                type="button"
+                class={`${(props.own?.count ?? 0) === 0 ? PRIMARY_BUTTON : SECONDARY_BUTTON} mt-2.5`}
+                onClick={() => props.onStart()}
+              >
+                <SearchIcon class="size-[18px]" />
+                Find my blunders
+              </button>
+              <p class="mt-2 text-[12px] leading-snug text-muted">
+                Your analysis engine goes through every game you haven't checked yet, in the
+                background. Moves that threw away the game become puzzles when there was one clearly
+                better move.
+              </p>
+            </>
+          }
+        >
+          <div class="mt-2.5 flex flex-col gap-2">
+            <p class="truncate text-[13px] font-semibold">
+              <Show when={progress()} fallback="Waking up the engine…">
+                {(current) =>
+                  current().gamesTotal === 0
+                    ? "No new games to look through"
+                    : `Game ${Math.min(current().gamesDone + 1, current().gamesTotal)} of ${current().gamesTotal}: ${current().game}`
+                }
+              </Show>
+            </p>
+            <ProgressBar label="Blunder search" fraction={fraction()} />
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                class={SECONDARY_BUTTON}
+                onClick={() => void cancelBlunderSearch()}
+              >
+                Stop
+              </button>
+              <span class="text-[12px] text-muted">
+                {progress()?.found ?? 0} found · what's found is kept
+              </span>
+            </div>
+          </div>
+        </Show>
+      </Show>
+    </Card>
   );
 }

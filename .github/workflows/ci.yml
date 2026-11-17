@@ -25,16 +25,12 @@ jobs:
       # fetch-stockfish queries the GitHub API; authenticate to avoid rate limits.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Rust comes from rustup (preinstalled on the runners) via rust-toolchain.toml.
-      - name: Install Rust toolchain
-        run: rustup toolchain install
-
-      - uses: Swatinem/rust-cache@v2
-
-      # Node and pnpm come from mise.toml.
-      - uses: jdx/mise-action@v5
+      # Node and pnpm from mise.toml, Rust from rust-toolchain.toml, plus caches.
+      - uses: ./.github/actions/setup
 
       - name: Lint and type-check
         run: mise run check

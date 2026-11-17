@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { sampleGame } from "../data/mockGame";
+import { sampleGame } from "../test/sampleGame";
 import { parseWorkspace, type SavedWorkspace, serializeWorkspace } from "./workspace";
 
 const tab = (title: string) => ({ title, game: sampleGame, position: [0, 0, 1] });

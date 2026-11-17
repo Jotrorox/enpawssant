@@ -1,4 +1,4 @@
-// A sample game for tests.
+// A sample game with a variation, comments and NAGs, shared by the tests.
 
 import type { PgnGame } from "../chess/pgn";
 

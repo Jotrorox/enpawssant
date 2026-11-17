@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { START_FEN } from "./board";
-import { completeFen, formatResult, looksLikeFen } from "./database";
+import { completeFen, formatResult, looksLikeFen, parseNames, personalScore } from "./database";
 
 describe("looksLikeFen", () => {
   it("accepts full FENs and bare piece placements", () => {
@@ -29,4 +29,26 @@ describe("completeFen", () => {
 it("writes draws as ½-½", () => {
   expect(formatResult("1/2-1/2")).toBe("½-½");
   expect(formatResult("1-0")).toBe("1-0");
+});
+
+describe("parseNames", () => {
+  it("splits at commas and keeps spaces inside names", () => {
+    expect(parseNames(" Mochi , Tofu the Cat,, ")).toEqual(["Mochi", "Tofu the Cat"]);
+    expect(parseNames("")).toEqual([]);
+  });
+});
+
+describe("personalScore", () => {
+  it("scores from the player's side", () => {
+    const counts = { white: 3, draws: 2, black: 5 };
+    expect(personalScore(counts, "w")).toEqual({
+      wins: 3,
+      draws: 2,
+      losses: 5,
+      games: 10,
+      percent: 40,
+    });
+    expect(personalScore(counts, "b")?.percent).toBe(60);
+    expect(personalScore({ white: 0, draws: 0, black: 0 }, "w")).toBeUndefined();
+  });
 });

@@ -8,7 +8,8 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
+import { type Color, fenPlyIndex, fenTurn, moveNumberPrefix } from "../chess/board";
+import { myNames, personalScore } from "../chess/database";
 import { type AnalysisUpdate, type EngineInfo, fetchEngineInfo } from "../chess/engine";
 import { engineRevision, enginesConfig, setEngineRoles } from "../chess/engines";
 import {
@@ -24,22 +25,25 @@ import {
 import { cancelSignIn, lichessAccount, markSignedOut, signIn, signOut } from "../chess/lichess";
 import { parseUciMove } from "../chess/rules";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
+import type { OnlineGame } from "../game/online";
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
 import { AnnotationCard } from "./AnnotationCard";
 import { CatIcon } from "./Icons";
-import { Notation } from "./Notation";
+import { NamesForm } from "./MyNames";
+import { type BestMoveHint, Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
 import { Card, CardTitle, EmptyState, PRIMARY_BUTTON, SECONDARY_BUTTON, Segmented } from "./ui";
 
-type PanelTab = "analysis" | "database" | "annotate" | "info";
+type PanelTab = "analysis" | "annotate";
 
 const PANEL_TABS = [
   { value: "analysis", label: "Analysis" },
-  { value: "database", label: "Database" },
   { value: "annotate", label: "Annotate" },
-  { value: "info", label: "Info" },
 ] as const;
+
+/** A game in progress in another tab, which fair-play mode points back to. */
+export type LiveGame = { title: string; onShow: () => void };
 
 /** What one engine found for the current position. */
 export type EngineView = {
@@ -56,18 +60,25 @@ type AnalysisPanelProps = {
   secondary?: EngineView;
   /** Evaluation of the current position: the engine's, or the one the game was imported with. */
   score?: Score;
+  /** Set on an inaccuracy, mistake or blunder: what would have been better. */
+  bestMove?: BestMoveHint;
   engineOn: boolean;
   onToggleEngine: () => void;
-  /** The game against the engine in this tab, if there is one. */
-  game?: EngineGame;
+  /** The game being played in this tab, if there is one. */
+  game?: EngineGame | OnlineGame;
+  /** A game is in progress, here or in another tab: the engine and the explorer are off. */
+  fairPlay: boolean;
+  /** The game in progress when it is in another tab. */
+  liveGame?: LiveGame;
   onNewGame: () => void;
+  onAnalyse: () => void;
 };
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
   const fen = () => props.session.node().fen;
   const [tab, setTab] = createSignal<PanelTab>("analysis");
-  // Lives here rather than in the engine card so switching panels doesn't restart the engine.
-  // Asking again after the engine restarts with new options picks up its new settings.
+  // Lives here rather than in the engine card so hiding the card during a game doesn't ask the
+  // engine again. Asking again after the engine restarts with new options picks up its settings.
   const [engine] = createResource(
     () => [props.primary.id, engineRevision(props.primary.id)] as const,
     ([id]) => fetchEngineInfo(id),
@@ -82,28 +93,25 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         onChange={setTab}
         class="shrink-0 border border-blush-200/80 bg-blush-100/80"
       />
-      <Switch
-        fallback={
-          <Card class="flex flex-1 p-5">
-            <EmptyState class="flex-1">
-              The {PANEL_TABS.find((t) => t.value === tab())?.label.toLowerCase()} panel is still
-              napping. Check back soon!
-            </EmptyState>
-          </Card>
-        }
-      >
+      <Switch>
         <Match when={tab() === "annotate"}>
           <AnnotationCard session={props.session} />
-          <Notation session={props.session} score={props.score} />
+          <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
         </Match>
         <Match when={tab() === "analysis"}>
           <Show when={props.game}>
             {(game) => (
-              <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />
+              <PlayCard
+                session={props.session}
+                game={game()}
+                onNewGame={props.onNewGame}
+                onAnalyse={props.onAnalyse}
+              />
             )}
           </Show>
-          {/* No help from the engine or the explorer while the game is on. */}
-          <Show when={!props.game?.playing()}>
+          {/* No help from the engine or the explorer while a game is on, in any tab. */}
+          <Show when={props.liveGame}>{(live) => <FairPlayCard game={live()} />}</Show>
+          <Show when={!props.fairPlay}>
             <EngineCard
               engine={engine}
               engineId={props.primary.id}
@@ -116,10 +124,35 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
             />
             <ExplorerCard session={props.session} />
           </Show>
-          <Notation session={props.session} score={props.score} />
+          <Notation session={props.session} score={props.score} bestMove={props.bestMove} />
         </Match>
       </Switch>
     </div>
+  );
+}
+
+/** Stands in for the engine and the explorer while a game is on in another tab. */
+function FairPlayCard(props: { game: LiveGame }) {
+  return (
+    <Card class="flex shrink-0 items-start gap-3 px-[18px] py-3.5">
+      <span class="grid size-8 shrink-0 place-items-center rounded-full bg-lavender text-ink">
+        <CatIcon class="size-[18px]" />
+      </span>
+      <div class="min-w-0 flex-1">
+        <CardTitle>Fair play</CardTitle>
+        <p class="mt-1 text-[13px] leading-snug text-muted">
+          A game is on in <span class="font-bold text-ink">{props.game.title}</span>, so the engine,
+          the opening explorer, Copy FEN and Export PGN are napping in every tab until it's over.
+        </p>
+      </div>
+      <button
+        type="button"
+        class={`${SECONDARY_BUTTON} shrink-0`}
+        onClick={() => props.game.onShow()}
+      >
+        Go to the game
+      </button>
+    </Card>
   );
 }
 
@@ -388,6 +421,17 @@ const EXPLORER_SOURCES = [
 
 type ExplorerTab = (typeof EXPLORER_SOURCES)[number]["value"];
 
+const PERSPECTIVES = [
+  { value: "all", label: "All games" },
+  { value: "w", label: "You as White" },
+  { value: "b", label: "You as Black" },
+] as const;
+
+type Perspective = (typeof PERSPECTIVES)[number]["value"];
+
+/** Whose games "My games" shows, kept across tabs for the session. */
+const [perspective, setPerspective] = createSignal<Perspective>("all");
+
 /** Rows visible before the move list scrolls, so the notation below keeps its room. */
 const EXPLORER_MAX_HEIGHT = "max-h-[214px]";
 
@@ -395,11 +439,16 @@ function ExplorerCard(props: { session: GameSession }) {
   const session = props.session;
   const [tab, setTab] = createSignal<ExplorerTab>("masters");
   const account = lichessAccount;
+  const side = (): Color | undefined =>
+    perspective() === "all" ? undefined : (perspective() as Color);
+  /** Showing the user's own games, but Mochi doesn't know their names yet. */
+  const needsNames = () => side() !== undefined && myNames()?.names.length === 0;
   const explorer = createExplorer({
     fen: () => session.node().fen,
     source: tab,
+    side,
     // Your own games need no Lichess account.
-    enabled: () => tab() === "mine" || account().status === "signedIn",
+    enabled: () => (tab() === "mine" && !needsNames()) || account().status === "signedIn",
     onSignedOut: markSignedOut,
   });
   const lineFens = () =>
@@ -443,12 +492,29 @@ function ExplorerCard(props: { session: GameSession }) {
         </Show>
       </p>
 
+      <Show when={tab() === "mine"}>
+        <Segmented
+          size="sm"
+          label="Whose games"
+          options={PERSPECTIVES}
+          value={perspective()}
+          onChange={setPerspective}
+          class="mb-1.5 border border-blush-200/80 bg-blush-50"
+        />
+      </Show>
+
       <Switch>
+        <Match when={tab() === "mine" && needsNames()}>
+          <EmptyState class="place-items-stretch">
+            <NamesForm intro="Which names do you play under? Mochi looks for them in your database to show how you score from here." />
+          </EmptyState>
+        </Match>
         <Match when={tab() === "mine" && explorer.state()}>
           {(state) => (
             <ExplorerResults
               state={state()}
               local
+              side={side()}
               knownMoves={knownMoves()}
               onPlay={play}
               onRetry={explorer.retry}
@@ -515,7 +581,7 @@ function SignInPrompt(props: { error?: string }) {
     <EmptyState class="gap-3">
       <span>
         Lichess only shares its opening explorer with signed-in players. A free account is enough,
-        and EnPawssant can only read the explorer, never play or post as you.
+        and signing in also lets you play on lichess.org from the Play section.
       </span>
       <Show when={props.error}>
         {(error) => <span class="text-error">Mochi couldn't sign you in: {error()}.</span>}
@@ -531,6 +597,8 @@ type ExplorerResultsProps = {
   state: ExplorerState;
   /** Results come from the local game database rather than Lichess. */
   local?: boolean;
+  /** Only the user's games with this colour: scores are shown from their side. */
+  side?: Color;
   knownMoves: Set<string | undefined>;
   onPlay: (uci: string) => void;
   onRetry: () => void;
@@ -568,45 +636,72 @@ function ExplorerResults(props: ExplorerResultsProps) {
       </Match>
       <Match when={result()?.moves.length === 0}>
         <EmptyState>
-          {props.local
-            ? "None of your games reached this position. Import games in the Database section."
-            : "No games reached this position yet."}
+          {props.side
+            ? `You haven't reached this position as ${props.side === "w" ? "White" : "Black"} yet.`
+            : props.local
+              ? "None of your games reached this position. Import games in the Database section."
+              : "No games reached this position yet."}
         </EmptyState>
       </Match>
       <Match when={result()}>
         {(result) => (
-          <div
-            class={`${EXPLORER_MAX_HEIGHT} overflow-y-auto transition-opacity ${
-              props.state.status === "loading" ? "opacity-50" : ""
-            }`}
-            aria-busy={props.state.status === "loading"}
-          >
-            <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
-              <thead class="sticky top-0 z-10 bg-white">
-                <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
-                  <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
-                  <th class="w-[76px] py-1 text-right font-bold">Games</th>
-                  <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={result().moves}>
-                  {(move) => (
-                    <ExplorerRowView
-                      label={move.san}
-                      counts={move}
-                      title={
-                        move.averageRating ? `Average rating ${move.averageRating}` : undefined
-                      }
-                      highlighted={props.knownMoves.has(move.uci)}
-                      onClick={() => props.onPlay(move.uci)}
-                    />
-                  )}
-                </For>
-                <ExplorerRowView label="Σ" counts={result()} title="All games" muted />
-              </tbody>
-            </table>
-          </div>
+          <>
+            <Show when={props.side && personalScore(result(), props.side)}>
+              {(score) => (
+                <p class="mb-1 px-2.5 text-[13px]" aria-live="polite">
+                  You score <span class="font-bold">{score().percent}%</span> from here
+                  <span class="text-muted">
+                    {" "}
+                    · {score().wins} won, {score().draws} drawn, {score().losses} lost
+                  </span>
+                </p>
+              )}
+            </Show>
+            <div
+              class={`${EXPLORER_MAX_HEIGHT} overflow-y-auto transition-opacity ${
+                props.state.status === "loading" ? "opacity-50" : ""
+              }`}
+              aria-busy={props.state.status === "loading"}
+            >
+              <table class="w-full border-separate border-spacing-y-0.5 text-[14px]">
+                <thead class="sticky top-0 z-10 bg-white">
+                  <tr class="text-left text-[11px] font-bold tracking-[0.08em] text-ink/70 uppercase">
+                    <th class="w-[64px] py-1 pl-2.5 font-bold">Move</th>
+                    <th class="w-[76px] py-1 text-right font-bold">Games</th>
+                    <Show when={props.side}>
+                      <th class="w-[56px] py-1 text-right font-bold" title="Your score">
+                        You
+                      </th>
+                    </Show>
+                    <th class="py-1 pl-3 font-bold">White · Draw · Black</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={result().moves}>
+                    {(move) => (
+                      <ExplorerRowView
+                        label={move.san}
+                        counts={move}
+                        side={props.side}
+                        title={
+                          move.averageRating ? `Average rating ${move.averageRating}` : undefined
+                        }
+                        highlighted={props.knownMoves.has(move.uci)}
+                        onClick={() => props.onPlay(move.uci)}
+                      />
+                    )}
+                  </For>
+                  <ExplorerRowView
+                    label="Σ"
+                    counts={result()}
+                    side={props.side}
+                    title="All games"
+                    muted
+                  />
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Match>
     </Switch>
@@ -619,6 +714,8 @@ function explorerErrorMessage(error: ExplorerError): string {
       return "Lichess signed you out. Sign in again to keep exploring.";
     case "rateLimited":
       return "Lichess asked Mochi to slow down. Give it a minute, then try again.";
+    case "notFound":
+      return "Lichess has nothing for this position.";
     case "failed":
       return `Mochi couldn't reach Lichess: ${error.message}.`;
   }
@@ -627,6 +724,8 @@ function explorerErrorMessage(error: ExplorerError): string {
 type ExplorerRowProps = {
   label: string;
   counts: ResultCounts;
+  /** Adds the user's score with this colour. */
+  side?: Color;
   title?: string;
   highlighted?: boolean;
   /** The totals row is not clickable. */
@@ -654,6 +753,13 @@ function ExplorerRowView(props: ExplorerRowProps) {
       <td class={`py-1.5 text-right font-mono text-[13px] ${cell()}`}>
         {totalGames(props.counts).toLocaleString("en-US")}
       </td>
+      <Show when={props.side}>
+        {(side) => (
+          <td class={`py-1.5 text-right font-mono text-[13px] font-bold ${cell()}`}>
+            {personalScore(props.counts, side())?.percent ?? 0}%
+          </td>
+        )}
+      </Show>
       <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 ${cell()}`}>
         <div class="flex h-[22px] overflow-hidden rounded-full bg-snow text-[11px] font-bold ring-1 ring-blush-200">
           <ResultSegment percent={shares().white} class="text-plum" />

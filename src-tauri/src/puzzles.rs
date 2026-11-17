@@ -4,7 +4,12 @@
 //! A starter pack of a few thousand puzzles is bundled, so puzzles work offline right away. The
 //! full database (millions of puzzles, about 300 MB compressed) can be downloaded from the app;
 //! only well-liked, often played puzzles are kept from it.
+//!
+//! Puzzles made from the user's own blunders (`blunders.rs`) live here too, in a table of their
+//! own, and are played unrated in "My blunders" mode: new ones first, then the ones missed last
+//! time.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::ops::ControlFlow;
@@ -50,6 +55,31 @@ CREATE INDEX IF NOT EXISTS attempts_puzzle ON attempts (puzzle_id);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+-- Puzzles from the user's own games: the position before their blunder, one move early.
+CREATE TABLE IF NOT EXISTS own_puzzles (
+    id TEXT PRIMARY KEY,
+    fen TEXT NOT NULL,
+    moves TEXT NOT NULL,
+    themes TEXT NOT NULL,
+    -- The game's fingerprint in the game database, in hex.
+    game TEXT NOT NULL,
+    -- Moves played in the game before the blunder.
+    ply INTEGER NOT NULL,
+    -- The blunder, in SAN, and the winning chances it gave away in percentage points.
+    played TEXT NOT NULL,
+    loss REAL NOT NULL,
+    white TEXT NOT NULL,
+    black TEXT NOT NULL,
+    date TEXT NOT NULL,
+    event TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+-- Games already searched for blunders, by fingerprint.
+CREATE TABLE IF NOT EXISTS scanned_games (
+    game TEXT PRIMARY KEY,
+    at INTEGER NOT NULL,
+    found INTEGER NOT NULL
 );
 ";
 
@@ -176,6 +206,104 @@ pub struct PuzzleData {
     plays: u32,
     themes: Vec<String>,
     game_url: String,
+    /// For puzzles from the user's own games: where the puzzle comes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<Origin>,
+}
+
+/// The game a puzzle from the user's blunders comes from.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Origin {
+    /// The game's fingerprint in the game database, in hex.
+    pub game: String,
+    /// Moves played in the game before the blunder.
+    pub ply: u32,
+    /// The move played in the game, in SAN.
+    pub played: String,
+    /// Winning chances the move gave away, in percentage points.
+    pub loss: f64,
+    pub white: String,
+    pub black: String,
+    pub date: String,
+    pub event: String,
+}
+
+/// A puzzle made from one of the user's blunders, ready to store.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnPuzzle {
+    pub id: String,
+    /// The position before the opponent's move that came before the blunder.
+    pub fen: String,
+    /// UCI moves, starting with that opponent's move.
+    pub moves: Vec<String>,
+    pub themes: Vec<String>,
+    pub origin: Origin,
+}
+
+fn insert_own_puzzle(conn: &Connection, puzzle: &OwnPuzzle) -> rusqlite::Result<()> {
+    let origin = &puzzle.origin;
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO own_puzzles
+            (id, fen, moves, themes, game, ply, played, loss, white, black, date, event, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+    )?
+    .execute(params![
+        puzzle.id,
+        puzzle.fen,
+        puzzle.moves.join(" "),
+        puzzle.themes.join(" "),
+        origin.game,
+        origin.ply,
+        origin.played,
+        origin.loss,
+        origin.white,
+        origin.black,
+        origin.date,
+        origin.event,
+        store::now(),
+    ])
+    .map(|_| ())
+}
+
+/// Stores the puzzles found in a game and marks it as searched, all at once.
+fn save_scan(conn: &mut Connection, game: &str, found: &[OwnPuzzle]) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    for puzzle in found {
+        insert_own_puzzle(&tx, puzzle)?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO scanned_games (game, at, found) VALUES (?1, ?2, ?3)",
+        params![game, store::now(), found.len()],
+    )?;
+    tx.commit()
+}
+
+impl Puzzles {
+    /// Fingerprints of the games already searched for blunders.
+    pub(crate) async fn scanned_games<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<HashSet<String>, String> {
+        self.store
+            .run(app, |conn| {
+                let mut statement = conn.prepare_cached("SELECT game FROM scanned_games")?;
+                statement.query_map([], |row| row.get(0))?.collect()
+            })
+            .await
+    }
+
+    /// Stores the puzzles found in a game and marks it as searched.
+    pub(crate) async fn save_scan<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        game: String,
+        found: Vec<OwnPuzzle>,
+    ) -> Result<(), String> {
+        self.store
+            .run(app, move |conn| save_scan(conn, &game, &found))
+            .await
+    }
 }
 
 fn insert_puzzle(conn: &Connection, puzzle: &Puzzle) -> rusqlite::Result<()> {
@@ -238,6 +366,8 @@ pub enum Mode {
     Rated,
     /// Puzzles that get harder with every solve; one mistake ends the run.
     Streak,
+    /// Puzzles from the user's own blunders, unrated.
+    Mine,
 }
 
 impl Mode {
@@ -245,6 +375,15 @@ impl Mode {
         match self {
             Mode::Rated => "rated",
             Mode::Streak => "streak",
+            Mode::Mine => "mine",
+        }
+    }
+
+    fn parse(text: &str) -> Mode {
+        match text {
+            "streak" => Mode::Streak,
+            "mine" => Mode::Mine,
+            _ => Mode::Rated,
         }
     }
 }
@@ -303,6 +442,7 @@ fn next_puzzle(conn: &Connection, request: &NextRequest) -> rusqlite::Result<Opt
                             plays: row.get(5)?,
                             themes: themes.split_whitespace().map(str::to_owned).collect(),
                             game_url: row.get(7)?,
+                            origin: None,
                         })
                     },
                 )
@@ -310,6 +450,54 @@ fn next_puzzle(conn: &Connection, request: &NextRequest) -> rusqlite::Result<Opt
             if found.is_some() {
                 return Ok(found);
             }
+        }
+    }
+    Ok(None)
+}
+
+/// The next puzzle from the user's blunders: one never tried, else one missed last time, else the
+/// one solved longest ago. `exclude` is skipped unless nothing else is left.
+fn next_own_puzzle(conn: &Connection, exclude: &[String]) -> rusqlite::Result<Option<PuzzleData>> {
+    let mut statement = conn.prepare_cached(
+        "SELECT id, fen, moves, themes, game, ply, played, loss, white, black, date, event,
+                (SELECT solved FROM attempts WHERE puzzle_id = own_puzzles.id
+                 ORDER BY attempts.id DESC LIMIT 1) AS last_solved,
+                (SELECT MAX(at) FROM attempts WHERE puzzle_id = own_puzzles.id) AS last_at
+         FROM own_puzzles
+         WHERE instr(' ' || ?1 || ' ', ' ' || id || ' ') = 0
+         ORDER BY CASE WHEN last_solved IS NULL THEN 0 WHEN last_solved = 0 THEN 1 ELSE 2 END,
+                  last_at, created_at DESC, random()
+         LIMIT 1",
+    )?;
+    for excluded in [exclude.join(" "), String::new()] {
+        let found = statement
+            .query_row([excluded], |row| {
+                let moves: String = row.get(2)?;
+                let themes: String = row.get(3)?;
+                Ok(PuzzleData {
+                    id: row.get(0)?,
+                    fen: row.get(1)?,
+                    moves: moves.split_whitespace().map(str::to_owned).collect(),
+                    rating: 0,
+                    popularity: 0,
+                    plays: 0,
+                    themes: themes.split_whitespace().map(str::to_owned).collect(),
+                    game_url: String::new(),
+                    origin: Some(Origin {
+                        game: row.get(4)?,
+                        ply: row.get(5)?,
+                        played: row.get(6)?,
+                        loss: row.get(7)?,
+                        white: row.get(8)?,
+                        black: row.get(9)?,
+                        date: row.get(10)?,
+                        event: row.get(11)?,
+                    }),
+                })
+            })
+            .optional()?;
+        if found.is_some() {
+            return Ok(found);
         }
     }
     Ok(None)
@@ -331,10 +519,16 @@ fn record(
     solved: bool,
 ) -> rusqlite::Result<RecordResult> {
     let tx = conn.transaction()?;
-    let puzzle_rating: u32 =
+    // Puzzles from the user's own games have no rating, and never move theirs.
+    let puzzle_rating: u32 = if mode == Mode::Mine {
+        tx.query_row("SELECT 0 FROM own_puzzles WHERE id = ?1", [id], |row| {
+            row.get(0)
+        })?
+    } else {
         tx.query_row("SELECT rating FROM puzzles WHERE id = ?1", [id], |row| {
             row.get(0)
-        })?;
+        })?
+    };
     let seen: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM attempts WHERE puzzle_id = ?1)",
         [id],
@@ -402,6 +596,41 @@ pub struct PuzzleStatus {
     profile: Profile,
     /// The latest attempts, newest first.
     history: Vec<Attempt>,
+    own: OwnStatus,
+}
+
+/// The puzzles from the user's own blunders.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnStatus {
+    count: u64,
+    /// Never tried yet.
+    fresh: u64,
+    /// Missed the last time they were tried.
+    missed: u64,
+    /// Games searched for blunders so far.
+    scanned_games: u64,
+}
+
+fn own_status(conn: &Connection) -> rusqlite::Result<OwnStatus> {
+    conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(last_solved IS NULL), 0),
+                COALESCE(SUM(last_solved = 0), 0),
+                (SELECT COUNT(*) FROM scanned_games)
+         FROM (SELECT (SELECT solved FROM attempts WHERE puzzle_id = own_puzzles.id
+                       ORDER BY attempts.id DESC LIMIT 1) AS last_solved
+               FROM own_puzzles)",
+        [],
+        |row| {
+            Ok(OwnStatus {
+                count: row.get(0)?,
+                fresh: row.get(1)?,
+                missed: row.get(2)?,
+                scanned_games: row.get(3)?,
+            })
+        },
+    )
 }
 
 fn status(conn: &Connection) -> rusqlite::Result<PuzzleStatus> {
@@ -416,11 +645,7 @@ fn status(conn: &Connection) -> rusqlite::Result<PuzzleStatus> {
             Ok(Attempt {
                 puzzle_id: row.get(0)?,
                 at: row.get(1)?,
-                mode: if mode == "streak" {
-                    Mode::Streak
-                } else {
-                    Mode::Rated
-                },
+                mode: Mode::parse(&mode),
                 solved: row.get(3)?,
                 rating_after: row.get(4)?,
             })
@@ -431,6 +656,7 @@ fn status(conn: &Connection) -> rusqlite::Result<PuzzleStatus> {
         source: meta_get(conn, "source")?.unwrap_or_else(|| "starter".into()),
         profile: profile(conn)?,
         history,
+        own: own_status(conn)?,
     })
 }
 
@@ -689,6 +915,39 @@ pub async fn puzzles_next<R: Runtime>(
         .await
 }
 
+/// A puzzle from the user's own blunders, or `None` when there are none yet.
+#[tauri::command]
+pub async fn puzzles_next_own<R: Runtime>(
+    app: AppHandle<R>,
+    puzzles: State<'_, Puzzles>,
+    exclude: Vec<String>,
+) -> Result<Option<PuzzleData>, String> {
+    puzzles
+        .store
+        .run(&app, move |conn| next_own_puzzle(conn, &exclude))
+        .await
+}
+
+/// Forgets the puzzles from the user's games and which games were searched, e.g. after they
+/// changed their names. Attempts at them go too.
+#[tauri::command]
+pub async fn puzzles_clear_own<R: Runtime>(
+    app: AppHandle<R>,
+    puzzles: State<'_, Puzzles>,
+) -> Result<PuzzleStatus, String> {
+    puzzles
+        .store
+        .run(&app, |conn| {
+            conn.execute_batch(
+                "DELETE FROM attempts WHERE mode = 'mine';
+                 DELETE FROM own_puzzles;
+                 DELETE FROM scanned_games;",
+            )?;
+            status(conn)
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn puzzles_record<R: Runtime>(
     app: AppHandle<R>,
@@ -906,6 +1165,66 @@ mod tests {
         assert_eq!(result.rating_change, None);
         assert_eq!(result.profile.failed, 2);
         assert_eq!(status(&conn).unwrap().history.len(), 3);
+    }
+
+    fn own_puzzle(id: &str, game: &str) -> OwnPuzzle {
+        OwnPuzzle {
+            id: id.into(),
+            fen: "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24".into(),
+            moves: vec!["f2g3".into(), "e6e7".into()],
+            themes: vec!["advantage".into(), "oneMove".into()],
+            origin: Origin {
+                game: game.into(),
+                ply: 47,
+                played: "Qh5".into(),
+                loss: 31.5,
+                white: "Mochi".into(),
+                black: "Tofu".into(),
+                date: "2026.05.06".into(),
+                event: "Casual".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn plays_own_puzzles_new_ones_first_then_misses() {
+        let mut conn = database();
+        assert_eq!(next_own_puzzle(&conn, &[]).unwrap(), None);
+        save_scan(
+            &mut conn,
+            "AA",
+            &[own_puzzle("own-a", "AA"), own_puzzle("own-b", "AA")],
+        )
+        .unwrap();
+        save_scan(&mut conn, "BB", &[]).unwrap();
+        let own = status(&conn).unwrap().own;
+        assert_eq!(
+            (own.count, own.fresh, own.missed, own.scanned_games),
+            (2, 2, 0, 2)
+        );
+
+        let first = next_own_puzzle(&conn, &[]).unwrap().unwrap();
+        assert_eq!(first.origin.as_ref().unwrap().played, "Qh5");
+        let rating = status(&conn).unwrap().profile.rating;
+        let result = record(&mut conn, &first.id, Mode::Mine, false).unwrap();
+        assert_eq!(result.rating_change, None);
+        assert_eq!(result.profile.rating, rating);
+
+        // The untried one comes next, then the missed one.
+        let second = next_own_puzzle(&conn, &[]).unwrap().unwrap();
+        assert_ne!(second.id, first.id);
+        record(&mut conn, &second.id, Mode::Mine, true).unwrap();
+        assert_eq!(next_own_puzzle(&conn, &[]).unwrap().unwrap().id, first.id);
+        // Excluding the only candidate still finds a puzzle.
+        assert!(
+            next_own_puzzle(&conn, &[first.id.clone(), second.id.clone()])
+                .unwrap()
+                .is_some()
+        );
+
+        let own = status(&conn).unwrap().own;
+        assert_eq!((own.fresh, own.missed), (0, 1));
+        assert_eq!(status(&conn).unwrap().history[0].mode, Mode::Mine);
     }
 
     #[test]

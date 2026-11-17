@@ -190,29 +190,44 @@ export function createEngineAnalysis(options: {
   };
 
   /**
-   * Searches every position in `fens` to `depth`, skipping positions already searched as deep.
-   * Resolves with each position's evaluation, or `undefined` when cancelled or the engine failed.
+   * Searches every position in `fens` to `depth`, skipping positions already searched as deep and
+   * those `skip` says are done. Hands each result to `onResult` as soon as it is in, with the depth
+   * it was searched to, so a stopped review keeps what it found. Resolves with whether every
+   * position got done; stopping it or an engine failure resolves with `false`.
    */
-  const review = async (fens: readonly string[], depth: number) => {
+  const review = async (
+    fens: readonly string[],
+    depth: number,
+    handlers: {
+      skip?: (index: number) => boolean;
+      onResult: (index: number, update: AnalysisUpdate, depth: number) => void;
+    },
+  ): Promise<boolean> => {
     const engineId = options.engineId();
-    if (!engineId) return undefined;
+    if (!engineId) return false;
     const run = ++reviewRun;
     setReviewError(undefined);
     setProgress({ done: 0, total: fens.length });
     try {
       for (const [index, fen] of fens.entries()) {
-        if (!searchedTo(fen, depth)) {
-          const complete = await searchToDepth(engineId, fen, depth);
-          if (run !== reviewRun || !complete) return undefined;
-          reviewedDepth.set(fen, Math.max(depth, reviewedDepth.get(fen) ?? 0));
+        if (!handlers.skip?.(index)) {
+          if (!searchedTo(fen, depth)) {
+            const complete = await searchToDepth(engineId, fen, depth);
+            if (run !== reviewRun || !complete) return false;
+            reviewedDepth.set(fen, Math.max(depth, reviewedDepth.get(fen) ?? 0));
+          }
+          const update = byFen[fen];
+          if (update) {
+            handlers.onResult(index, update, Math.max(update.depth, reviewedDepth.get(fen) ?? 0));
+          }
         }
         setProgress({ done: index + 1, total: fens.length });
       }
-      return fens.map((fen) => positionScore(byFen[fen]));
+      return true;
     } catch (reason) {
       if (run === reviewRun)
         setReviewError(reason instanceof Error ? reason.message : String(reason));
-      return undefined;
+      return false;
     } finally {
       if (run === reviewRun) setProgress(undefined);
     }
@@ -228,7 +243,7 @@ export function createEngineAnalysis(options: {
     reviewError,
     /** How far the running review is, if one is running. */
     reviewProgress: progress,
-    /** Stops the running review; it resolves with `undefined`. */
+    /** Stops the running review; it resolves with `false`. */
     cancelReview: () => {
       reviewRun++;
       setProgress(undefined);

@@ -59,9 +59,16 @@ export function press(
   };
 }
 
-/** Formats time left as `h:mm:ss`, `m:ss`, or `s.t` under ten seconds. */
+/**
+ * Formats time left as `s.t` under ten seconds, `m:ss`, `h:mm:ss`, or days and hours (`2d 5h`)
+ * for correspondence games.
+ */
 export function formatClock(ms: number): string {
   if (ms < 10_000) return (Math.floor(ms / 100) / 10).toFixed(1);
+  if (ms >= 86_400_000) {
+    const hours = Math.floor(ms / 3_600_000);
+    return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  }
   const total = Math.floor(ms / 1000);
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);

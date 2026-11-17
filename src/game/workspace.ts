@@ -17,6 +17,8 @@ export type SavedTab = {
   orientation?: "w" | "b";
   /** The PGN file the game was opened from or saved to, which Save writes to. */
   path?: string;
+  /** The Lichess game played in the tab, so it can reconnect. */
+  lichessId?: string;
 };
 
 export type SavedWorkspace = {
@@ -72,6 +74,7 @@ function isSavedTab(value: unknown): value is SavedTab {
     return false;
   }
   if (value.path !== undefined && typeof value.path !== "string") return false;
+  if (value.lichessId !== undefined && typeof value.lichessId !== "string") return false;
   const game = value.game;
   return (
     isRecord(game) &&

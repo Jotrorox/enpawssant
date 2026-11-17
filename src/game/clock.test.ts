@@ -28,6 +28,7 @@ describe("clock labels", () => {
   test("show tenths only when time is short", () => {
     expect(formatClock(3_600_000)).toBe("1:00:00");
     expect(formatClock(305_400)).toBe("5:05");
+    expect(formatClock(2 * 86_400_000 + 5 * 3_600_000 + 1)).toBe("2d 5h");
     expect(formatClock(10_000)).toBe("0:10");
     expect(formatClock(9_960)).toBe("9.9");
     expect(formatClock(0)).toBe("0.0");
