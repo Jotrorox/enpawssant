@@ -23,6 +23,8 @@ export type PgnGame = {
   /** Tag pairs such as `["White", "Whiskers"]`, in file order. */
   headers: [string, string][];
   startFen: string;
+  /** A comment about the starting position, before the first move. */
+  comment?: string;
   moves: PgnMove[];
 };
 
@@ -45,9 +47,21 @@ export const openPgnFile = () => invoke<OpenedPgn | null>("pgn_open_file");
 
 export const exportPgn = (game: PgnGame) => invoke<string>("pgn_export", { game });
 
-/** Shows a save dialog and writes the game, resolving to the file name or `null` if cancelled. */
+/** A game written to a file. */
+export type SavedPgn = { name: string; path: string };
+
+/** Shows a save dialog and writes the game, resolving to where it went or `null` if cancelled. */
 export const savePgnFile = (game: PgnGame, suggestedName: string) =>
-  invoke<string | null>("pgn_save_file", { game, suggestedName });
+  invoke<SavedPgn | null>("pgn_save_file", { game, suggestedName });
+
+/** Writes the game to a PGN file it was saved to before, replacing the file. */
+export const writePgnFile = (game: PgnGame, path: string) =>
+  invoke<SavedPgn>("pgn_write_path", { game, path });
+
+/** A file name for a game, without characters that file systems reject. */
+export function pgnFileName(title: string): string {
+  return `${title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "game"}.pgn`;
+}
 
 export function header(game: Pick<PgnGame, "headers">, name: string): string | undefined {
   const value = game.headers.find(([key]) => key === name)?.[1].trim();

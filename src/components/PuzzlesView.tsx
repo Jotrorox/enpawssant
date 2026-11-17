@@ -370,7 +370,7 @@ export function PuzzlesView(props: {
         <div class="mb-1 flex min-h-[30px] items-center gap-3">
           <h1 class="flex items-center gap-2 font-display text-[17px] font-semibold">
             <span
-              class={`size-3 rounded-[3px] ${side() === "w" ? "border-[1.5px] border-plum bg-white" : "bg-plum"}`}
+              class={`size-3 rounded-[3px] ${side() === "w" ? "border-[1.5px] border-plum bg-snow" : "bg-plum dark:ring-1 dark:ring-snow/40"}`}
               aria-hidden="true"
             />
             {round.phase === "loading" ? "Fetching a purrzle…" : `${sideName()} to play`}
@@ -670,9 +670,9 @@ function FeedbackCard(props: {
       aria-live="polite"
       class={`flex shrink-0 items-start gap-3 rounded-[20px] border px-[18px] py-3.5 shadow-card ${
         text().tone === "good"
-          ? "border-nag-good/30 bg-[#eef8f0]"
+          ? "border-nag-good/30 bg-nag-good/10"
           : text().tone === "bad"
-            ? "border-nag-mistake/25 bg-[#fdf0f0]"
+            ? "border-nag-mistake/25 bg-nag-mistake/10"
             : "border-blush-200/80 bg-lavender"
       }`}
     >

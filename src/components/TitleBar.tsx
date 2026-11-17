@@ -1,9 +1,8 @@
-import { For, onCleanup, onMount } from "solid-js";
+import { For } from "solid-js";
+import { isMac, onCommand } from "../commands";
 import { CatIcon, CloseIcon, PlusIcon, SearchIcon } from "./Icons";
 
 export type WorkspaceTab = { id: string; title: string; live?: boolean };
-
-const isMac = navigator.userAgent.includes("Mac");
 
 type TitleBarProps = {
   tabs: WorkspaceTab[];
@@ -18,16 +17,11 @@ type TitleBarProps = {
 export function TitleBar(props: TitleBarProps) {
   let search: HTMLInputElement | undefined;
 
-  onMount(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        search?.focus();
-        search?.select();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    onCleanup(() => window.removeEventListener("keydown", onKeyDown));
+  // ⌘K / Ctrl K, from the menu or the keyboard (see `commands.ts`).
+  onCommand((command) => {
+    if (command !== "search") return;
+    search?.focus();
+    search?.select();
   });
 
   return (

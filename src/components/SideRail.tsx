@@ -1,5 +1,5 @@
 import { For, type JSX } from "solid-js";
-import { BoardIcon, DatabaseIcon, EngineIcon, FolderIcon, PuzzleIcon, SunIcon } from "./Icons";
+import { BoardIcon, DatabaseIcon, EngineIcon, FolderIcon, GearIcon, PuzzleIcon } from "./Icons";
 
 export type Section = "board" | "database" | "engines" | "puzzles" | "files";
 
@@ -11,7 +11,11 @@ const SECTIONS: { id: Section; label: string; icon: () => JSX.Element }[] = [
   { id: "files", label: "Files", icon: () => <FolderIcon class="size-[22px]" /> },
 ];
 
-export function SideRail(props: { active: Section; onSelect: (section: Section) => void }) {
+export function SideRail(props: {
+  active: Section;
+  onSelect: (section: Section) => void;
+  onSettings: () => void;
+}) {
   const active = () => props.active;
 
   return (
@@ -41,9 +45,10 @@ export function SideRail(props: { active: Section; onSelect: (section: Section) 
         type="button"
         title="Settings"
         aria-label="Settings"
+        onClick={() => props.onSettings()}
         class="mt-auto grid size-[44px] place-items-center rounded-2xl text-ink/80 hover:bg-blush-100 hover:text-ink"
       >
-        <SunIcon class="size-[22px]" />
+        <GearIcon class="size-[22px]" />
       </button>
     </nav>
   );

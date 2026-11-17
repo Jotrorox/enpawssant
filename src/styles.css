@@ -1,8 +1,16 @@
 @import "tailwindcss";
 
+/* `dark:` follows the theme chosen in the settings rather than only the system's. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   --color-*: initial;
+  /* Card and field surfaces: white in the light theme, a dark plum in the dark one. */
   --color-white: #ffffff;
+  /* Always white, e.g. White's side of the eval bar or text on a dark chip. */
+  --color-snow: #ffffff;
+  /* White's side of the eval graph, which stays light in the dark theme. */
+  --color-eval-light: #fdeef2;
   --color-transparent: transparent;
 
   /* Text and dark accents */
@@ -41,6 +49,101 @@
   --font-chess: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", serif;
 
   --shadow-card: 0 1px 2px rgb(74 50 71 / 0.04), 0 4px 16px rgb(74 50 71 / 0.04);
+}
+
+/* The dark theme swaps the palette; components keep using the same colour names. Board colours
+   come from the board theme and stay the same in both. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-white: #2a2030;
+  --color-ink: #f4e8ef;
+  --color-muted: #b6a1b2;
+  --color-plum-soft: #5d4a5a;
+
+  --color-blush-50: #1b1420;
+  --color-blush-100: #31253a;
+  --color-blush-200: #443348;
+  --color-blush-300: #5b4058;
+  --color-blush-400: #7d506d;
+  --color-rose: #ec87a4;
+  --color-rose-strong: #f4a0b8;
+
+  --color-lavender: #302c47;
+  --color-eval-light: #e9dde5;
+
+  --color-nag-brilliant: #4cc38a;
+  --color-nag-good: #63c873;
+  --color-nag-interesting: #a197f2;
+  --color-nag-dubious: #f0a65e;
+  --color-nag-mistake: #f27c7c;
+
+  --color-error: #ff8f86;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25), 0 4px 16px rgb(0 0 0 / 0.2);
+}
+
+/* Board themes: the squares, the frame (with its cat ears), last-move highlights and coordinates. */
+:root {
+  --board-light: #fdeef2;
+  --board-dark: #f3b2c4;
+  --board-frame: #f7c6d3;
+  --board-ear: #f9dfe6;
+  --board-from: #fde7b2;
+  --board-to: #f9c497;
+  --board-coord: rgb(74 50 71 / 0.55);
+  /* Coordinates on dark squares, where a theme needs a different colour. */
+  --board-coord-on-dark: var(--board-coord);
+}
+
+:root[data-board-theme="mint"] {
+  --board-light: #eef6ec;
+  --board-dark: #a3cfae;
+  --board-frame: #bcdcc2;
+  --board-ear: #dbeedd;
+  --board-from: #f7eaa6;
+  --board-to: #ecc98c;
+  --board-coord: rgb(39 74 52 / 0.55);
+}
+
+:root[data-board-theme="lavender"] {
+  --board-light: #f1eefb;
+  --board-dark: #bbaee2;
+  --board-frame: #cdc3ec;
+  --board-ear: #e4def6;
+  --board-from: #fbe7b6;
+  --board-to: #f4c3a1;
+  --board-coord: rgb(64 50 104 / 0.55);
+}
+
+:root[data-board-theme="sky"] {
+  --board-light: #eaf3fb;
+  --board-dark: #97bcdd;
+  --board-frame: #b5d0e9;
+  --board-ear: #d9e8f5;
+  --board-from: #fbeab0;
+  --board-to: #f3c98f;
+  --board-coord: rgb(36 66 98 / 0.55);
+}
+
+:root[data-board-theme="tabby"] {
+  --board-light: #f0d9b5;
+  --board-dark: #b88a64;
+  --board-frame: #c99d74;
+  --board-ear: #e6c9a2;
+  --board-from: #f3e08a;
+  --board-to: #dcbb55;
+  --board-coord: rgb(84 52 30 / 0.6);
+}
+
+:root[data-board-theme="tuxedo"] {
+  --board-light: #c8c2d3;
+  --board-dark: #6c6380;
+  --board-frame: #4d455c;
+  --board-ear: #655c78;
+  --board-from: #e2cf8f;
+  --board-to: #d1a96e;
+  --board-coord: rgb(52 45 66 / 0.8);
+  --board-coord-on-dark: rgb(255 255 255 / 0.75);
 }
 
 @layer base {

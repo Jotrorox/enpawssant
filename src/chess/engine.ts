@@ -80,7 +80,7 @@ export function createEngineAnalysis(options: {
   engineId: Accessor<string | undefined>;
   fen: Accessor<string>;
   enabled: Accessor<boolean>;
-  multipv: number;
+  multipv: Accessor<number>;
 }) {
   const [byFen, setByFen] = createStore<Record<string, AnalysisUpdate>>({});
   const [error, setError] = createSignal<string>();
@@ -97,10 +97,12 @@ export function createEngineAnalysis(options: {
   const record = (update: AnalysisUpdate) => {
     const known = byFen[update.fen];
     // At equal depth, keep the update with more lines: a review's single line shouldn't replace
-    // the live search's MultiPV lines.
+    // the live search's MultiPV lines. More lines than before win at any depth, so asking for more
+    // lines in the settings shows them right away rather than once the new search is deeper.
     if (
       !known ||
       update.depth > known.depth ||
+      update.lines.length > known.lines.length ||
       (update.depth === known.depth && update.lines.length >= known.lines.length)
     ) {
       setByFen(update.fen, update);
@@ -148,11 +150,10 @@ export function createEngineAnalysis(options: {
       }
       // A live search is only ever `done` because it was replaced or stopped.
     };
-    invoke("engine_analyze", { engineId, fen, multipv: options.multipv, onEvent: channel }).catch(
-      (reason) => {
-        if (search === generation) setError(String(reason));
-      },
-    );
+    const multipv = options.multipv();
+    invoke("engine_analyze", { engineId, fen, multipv, onEvent: channel }).catch((reason) => {
+      if (search === generation) setError(String(reason));
+    });
   });
 
   onCleanup(() => {

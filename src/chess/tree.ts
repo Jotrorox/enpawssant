@@ -21,7 +21,9 @@ export type MoveNode = {
   /** The move leading here; missing only for the root. */
   move?: { san: string; uci: string; from: Square; to: Square };
   nags: number[];
+  /** Comment before the move, for the first move of a variation. */
   startingComment?: string;
+  /** Comment after the move; on the root, the comment about the starting position. */
   comment?: string;
   /** The stored evaluation: imported from a `[%eval]`, or written by a game review. */
   eval?: PgnMove["eval"];
@@ -162,8 +164,9 @@ export function variationCount(tree: GameTree): number {
   );
 }
 
-export function treeFromPgn(game: Pick<PgnGame, "startFen" | "moves">): GameTree {
+export function treeFromPgn(game: Pick<PgnGame, "startFen" | "moves" | "comment">): GameTree {
   const tree = emptyTree(game.startFen);
+  tree.nodes[tree.rootId].comment = game.comment;
   // Iterate along lines and only recurse into variations, so long games don't grow the stack.
   const addLine = (parentId: NodeId, line: PgnMove[]) => {
     let parent = parentId;
@@ -210,5 +213,5 @@ export function treeToPgn(tree: GameTree, headers: [string, string][]): PgnGame 
     return moves;
   };
   const root = tree.nodes[tree.rootId];
-  return { headers, startFen: root.fen, moves: line(root.id) };
+  return { headers, startFen: root.fen, comment: root.comment, moves: line(root.id) };
 }

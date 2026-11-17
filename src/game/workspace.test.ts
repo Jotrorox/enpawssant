@@ -10,6 +10,20 @@ describe("saved workspace", () => {
     expect(parseWorkspace(serializeWorkspace(workspace))).toEqual(workspace);
   });
 
+  test("keeps the board orientation and the file a tab was saved to", () => {
+    const workspace: SavedWorkspace = {
+      tabs: [{ ...tab("Flipped"), orientation: "b", path: "/games/flipped.pgn" }, tab("Plain")],
+      active: 0,
+    };
+    expect(parseWorkspace(serializeWorkspace(workspace))).toEqual(workspace);
+    const odd = JSON.stringify({
+      version: 1,
+      tabs: [{ ...tab("Odd"), orientation: "x" }],
+      active: 0,
+    });
+    expect(parseWorkspace(odd)?.tabs).toEqual([]);
+  });
+
   test("ignores data it can't read", () => {
     expect(parseWorkspace("not json")).toBeUndefined();
     expect(parseWorkspace("[]")).toBeUndefined();

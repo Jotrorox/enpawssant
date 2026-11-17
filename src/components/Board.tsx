@@ -8,6 +8,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import { type Shape, type ShapeColor, toggleShape } from "../chess/annotations";
 import {
   type Arrow,
   type Color,
@@ -53,9 +54,6 @@ const DRAG_THRESHOLD = 4;
 const GLIDE_LANDING_MS = 110;
 const DROP_LANDING_MS = 25;
 
-type ShapeColor = "green" | "red" | "blue" | "yellow";
-type Shape = { from: Square; to: Square; color: ShapeColor };
-
 const SHAPE_COLORS: Record<ShapeColor, string> = {
   green: "var(--color-nag-good)",
   red: "var(--color-rose-strong)",
@@ -88,6 +86,12 @@ type BoardProps = {
   onMove?: (move: MoveInput) => void;
   /** Play a sound when the position changes. */
   sound?: boolean;
+  /**
+   * Circles and arrows drawn with the right mouse button. With `onShapesChange` the board shows
+   * these and reports changes instead of keeping its own, which it clears on every move.
+   */
+  shapes?: Shape[];
+  onShapesChange?: (shapes: Shape[]) => void;
 };
 
 export function Board(props: BoardProps) {
@@ -102,7 +106,13 @@ export function Board(props: BoardProps) {
   const [selected, setSelected] = createSignal<Square>();
   const [drag, setDrag] = createSignal<Drag>();
   const [promotion, setPromotion] = createSignal<{ from: Square; to: Square }>();
-  const [shapes, setShapes] = createSignal<Shape[]>([]);
+  const [ownShapes, setOwnShapes] = createSignal<Shape[]>([]);
+  const controlled = () => props.onShapesChange !== undefined;
+  const shapes = () => (controlled() ? (props.shapes ?? []) : ownShapes());
+  const setShapes = (next: Shape[]) => {
+    if (props.onShapesChange) props.onShapesChange(next);
+    else setOwnShapes(next);
+  };
   const [drawing, setDrawing] = createSignal<Shape>();
   /** Square under the pointer, for hover feedback. */
   const [pointerSquare, setPointerSquare] = createSignal<Square>();
@@ -187,7 +197,7 @@ export function Board(props: BoardProps) {
           setSelected(undefined);
           setDrag(undefined);
           setPromotion(undefined);
-          setShapes([]);
+          setOwnShapes([]);
           setDrawing(undefined);
         }),
       { defer: true },
@@ -228,13 +238,6 @@ export function Board(props: BoardProps) {
     props.onMove?.({ ...pending, promotion: type });
   };
 
-  const toggleShape = (shape: Shape) =>
-    setShapes((list) => {
-      const existing = list.find((s) => s.from === shape.from && s.to === shape.to);
-      const rest = list.filter((s) => s !== existing);
-      return existing?.color === shape.color ? rest : [...rest, shape];
-    });
-
   const onPointerDown = (event: PointerEvent) => {
     if (promotion() || drag() || drawing()) return;
     const at = locate(event);
@@ -249,7 +252,8 @@ export function Board(props: BoardProps) {
     }
     if (event.button !== 0) return;
 
-    setShapes([]);
+    // Shapes the board keeps itself are scribbles that a click wipes; stored ones stay put.
+    if (!controlled()) setOwnShapes([]);
     const current = selected();
     if (current && canMove(current, at.square)) {
       play(current, at.square);
@@ -298,7 +302,7 @@ export function Board(props: BoardProps) {
     const sketch = drawing();
     if (sketch) {
       setDrawing(undefined);
-      toggleShape(sketch);
+      setShapes(toggleShape(shapes(), sketch));
       return;
     }
     const current = drag();
@@ -375,7 +379,7 @@ export function Board(props: BoardProps) {
   return (
     <div class="relative pt-[30px]">
       <CatEars />
-      <div class="relative rounded-[28px] bg-blush-300 p-[11px] shadow-[0_10px_30px_-12px_rgb(224_112_143/0.45)]">
+      <div class="relative rounded-[28px] bg-(--board-frame) p-[11px] shadow-[0_10px_30px_-12px_rgb(224_112_143/0.45)]">
         {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-driven board; moves are also reachable from the notation and toolbar. */}
         <div
           ref={boardEl}
@@ -533,9 +537,9 @@ function BoardSquare(props: {
 }) {
   const light = () => isLightSquare(props.square);
   const background = () => {
-    if (props.lastMove === "to") return "bg-peach";
-    if (props.lastMove === "from") return "bg-cream";
-    return light() ? "bg-blush-100" : "bg-blush-400";
+    if (props.lastMove === "to") return "bg-(--board-to)";
+    if (props.lastMove === "from") return "bg-(--board-from)";
+    return light() ? "bg-(--board-light)" : "bg-(--board-dark)";
   };
   const fade = (visible: boolean) => (visible ? "opacity-100" : "opacity-0");
 
@@ -552,7 +556,7 @@ function BoardSquare(props: {
       />
       <Show when={props.lastMove === "from" && props.empty}>
         <span class="absolute inset-0 grid place-items-center">
-          <PawIcon class="size-[32%] text-peach" />
+          <PawIcon class="size-[32%] text-(--board-to)" />
         </span>
       </Show>
       <Show when={props.ghost}>
@@ -578,12 +582,16 @@ function BoardSquare(props: {
         />
       </Show>
       <Show when={props.rankLabel}>
-        <span class="absolute top-[3%] left-[6%] font-mono text-[max(8px,1.7cqw)] font-bold leading-none text-plum/55">
+        <span
+          class={`absolute top-[3%] left-[6%] font-mono text-[max(8px,1.7cqw)] font-bold leading-none ${light() ? "text-(--board-coord)" : "text-(--board-coord-on-dark)"}`}
+        >
           {props.rankLabel}
         </span>
       </Show>
       <Show when={props.fileLabel}>
-        <span class="absolute right-[6%] bottom-[3%] font-mono text-[max(8px,1.7cqw)] font-bold leading-none text-plum/55">
+        <span
+          class={`absolute right-[6%] bottom-[3%] font-mono text-[max(8px,1.7cqw)] font-bold leading-none ${light() ? "text-(--board-coord)" : "text-(--board-coord-on-dark)"}`}
+        >
           {props.fileLabel}
         </span>
       </Show>
@@ -780,13 +788,10 @@ function CatEars() {
 function Ear() {
   return (
     <svg viewBox="0 0 56 36" class="h-9 w-14" aria-hidden="true">
-      <path
-        d="M0 36 C8 24 16 8 24 3 Q28 0 32 3 C40 8 48 24 56 36 Z"
-        fill="var(--color-blush-300)"
-      />
+      <path d="M0 36 C8 24 16 8 24 3 Q28 0 32 3 C40 8 48 24 56 36 Z" fill="var(--board-frame)" />
       <path
         d="M13 36 C18 28 22 18 26 15 Q28 13.5 30 15 C34 18 38 28 43 36 Z"
-        fill="var(--color-blush-200)"
+        fill="var(--board-ear)"
       />
     </svg>
   );

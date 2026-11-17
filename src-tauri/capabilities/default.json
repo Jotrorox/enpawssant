@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Capability for the main window. Grants no shell permissions on purpose: only Rust spawns the engine.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-theme"]
 }

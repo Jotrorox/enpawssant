@@ -26,6 +26,7 @@ import { parseUciMove } from "../chess/rules";
 import { formatScore, type GameResult, type Score, shareFor } from "../chess/score";
 import type { EngineGame } from "../game/play";
 import type { GameSession } from "../game/session";
+import { AnnotationCard } from "./AnnotationCard";
 import { CatIcon } from "./Icons";
 import { Notation } from "./Notation";
 import { PlayCard } from "./PlayCard";
@@ -81,8 +82,7 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
         onChange={setTab}
         class="shrink-0 border border-blush-200/80 bg-blush-100/80"
       />
-      <Show
-        when={tab() === "analysis"}
+      <Switch
         fallback={
           <Card class="flex flex-1 p-5">
             <EmptyState class="flex-1">
@@ -92,25 +92,33 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
           </Card>
         }
       >
-        <Show when={props.game}>
-          {(game) => <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />}
-        </Show>
-        {/* No help from the engine or the explorer while the game is on. */}
-        <Show when={!props.game?.playing()}>
-          <EngineCard
-            engine={engine}
-            engineId={props.primary.id}
-            fen={fen()}
-            analysis={props.primary.analysis}
-            enabled={props.engineOn}
-            error={props.primary.error}
-            secondary={props.secondary}
-            onToggle={props.onToggleEngine}
-          />
-          <ExplorerCard session={props.session} />
-        </Show>
-        <Notation session={props.session} score={props.score} />
-      </Show>
+        <Match when={tab() === "annotate"}>
+          <AnnotationCard session={props.session} />
+          <Notation session={props.session} score={props.score} />
+        </Match>
+        <Match when={tab() === "analysis"}>
+          <Show when={props.game}>
+            {(game) => (
+              <PlayCard session={props.session} game={game()} onNewGame={props.onNewGame} />
+            )}
+          </Show>
+          {/* No help from the engine or the explorer while the game is on. */}
+          <Show when={!props.game?.playing()}>
+            <EngineCard
+              engine={engine}
+              engineId={props.primary.id}
+              fen={fen()}
+              analysis={props.primary.analysis}
+              enabled={props.engineOn}
+              error={props.primary.error}
+              secondary={props.secondary}
+              onToggle={props.onToggleEngine}
+            />
+            <ExplorerCard session={props.session} />
+          </Show>
+          <Notation session={props.session} score={props.score} />
+        </Match>
+      </Switch>
     </div>
   );
 }
@@ -148,7 +156,7 @@ function EngineCard(props: EngineCardProps) {
           }`}
         >
           <span
-            class={`absolute top-[3px] left-[3px] size-[14px] rounded-full bg-white shadow transition-transform ${
+            class={`absolute top-[3px] left-[3px] size-[14px] rounded-full bg-snow shadow transition-transform ${
               props.enabled ? "translate-x-[14px]" : ""
             }`}
           />
@@ -647,10 +655,10 @@ function ExplorerRowView(props: ExplorerRowProps) {
         {totalGames(props.counts).toLocaleString("en-US")}
       </td>
       <td class={`rounded-r-xl py-1.5 pr-1.5 pl-3 ${cell()}`}>
-        <div class="flex h-[22px] overflow-hidden rounded-full bg-white text-[11px] font-bold ring-1 ring-blush-200">
-          <ResultSegment percent={shares().white} class="text-ink" />
+        <div class="flex h-[22px] overflow-hidden rounded-full bg-snow text-[11px] font-bold ring-1 ring-blush-200">
+          <ResultSegment percent={shares().white} class="text-plum" />
           <ResultSegment percent={shares().draw} class="bg-plum-soft text-ink" />
-          <ResultSegment percent={shares().black} class="bg-plum text-white" />
+          <ResultSegment percent={shares().black} class="bg-plum text-snow" />
         </div>
       </td>
     </tr>

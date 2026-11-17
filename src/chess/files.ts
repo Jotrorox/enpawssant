@@ -86,8 +86,8 @@ function saveRecent(list: RecentFile[]) {
   }
 }
 
-/** Remembers a file that was just opened. */
-export function rememberFile(opened: Pick<OpenedPgn, "path" | "name" | "games">) {
+/** Remembers a file that was just opened or saved. */
+export function rememberFile(opened: { path: string; name: string; games: readonly unknown[] }) {
   saveRecent(
     withRecent(recentFiles(), {
       path: opened.path,
@@ -101,6 +101,14 @@ export function rememberFile(opened: Pick<OpenedPgn, "path" | "name" | "games">)
 export function forgetFile(path: string) {
   saveRecent(recentFiles().filter((entry) => entry.path !== path));
 }
+
+export function clearRecentFiles() {
+  saveRecent([]);
+}
+
+/** Shows the recent files under File › Open Recent in the macOS menu. */
+export const showRecentInMenu = (files: RecentFile[]) =>
+  invoke("menu_set_recent", { files: files.map(({ name }) => ({ name })) });
 
 /** A size such as `12 KB` or `3.4 MB`. */
 export function formatSize(bytes: number): string {
